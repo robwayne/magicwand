@@ -21,8 +21,16 @@ final class TVConnectionManager {
         var isConnected: Bool { self == .connected }
     }
 
+    /// Which top-level UI to show. Onboarding is only for first launch or "add a new TV";
+    /// otherwise we go straight to the main app and (re)connect in the background.
+    enum Route {
+        case onboarding
+        case main
+    }
+
     // Live state the UI observes.
     private(set) var status: Status = .disconnected
+    private(set) var route: Route = .onboarding
     private(set) var activeDevice: TVDevice?
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
@@ -40,6 +48,22 @@ final class TVConnectionManager {
     init() {
         client.onEvent = { [weak self] event in
             self?.handle(event)
+        }
+    }
+
+    // MARK: - Launch
+
+    /// Called once at launch. If we have a previously-paired TV, go straight to the
+    /// main app and silently reconnect using the stored client-key (no PIN prompt).
+    /// Otherwise show the onboarding flow.
+    func bootstrap(using store: TVStore) {
+        let candidate = store.device(withID: store.lastSelectedID)
+            ?? store.sortedForLibrary.first(where: { $0.isPaired })
+        if let device = candidate, device.isPaired {
+            route = .main
+            connect(to: device)
+        } else {
+            route = .onboarding
         }
     }
 
@@ -116,6 +140,7 @@ final class TVConnectionManager {
         discovered.removeAll()
         pendingDevice = nil
         capturedClientKey = nil
+        route = .onboarding
         startDiscovery()
     }
 
@@ -127,6 +152,9 @@ final class TVConnectionManager {
             status = .connecting
         case .awaitingPIN:
             status = .awaitingPIN
+            // A PIN is needed (first pairing, or the saved key expired) — make sure the
+            // onboarding pairing screen is what's on-screen.
+            route = .onboarding
         case .registered(let key):
             capturedClientKey = key
         case .ready:
@@ -144,6 +172,7 @@ final class TVConnectionManager {
         device.lastConnected = Date()
         activeDevice = device
         status = .connected
+        route = .main
         onPaired?(device)
         // Sync the mute indicator once connected.
         refreshVolume()
