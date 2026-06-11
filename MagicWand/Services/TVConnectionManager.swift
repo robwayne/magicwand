@@ -32,6 +32,7 @@ final class TVConnectionManager {
 
     private let client = SSAPClient()
     private let discovery = SSDPDiscovery()
+    private let bonjour = BonjourDiscovery()
     private var pendingDevice: TVDevice?
     private var capturedClientKey: String?
 
@@ -46,15 +47,19 @@ final class TVConnectionManager {
     func startDiscovery() {
         discovered.removeAll()
         status = .discovering
-        discovery.start { [weak self] tv in
+        let onFound: (DiscoveredTV) -> Void = { [weak self] tv in
             guard let self else { return }
-            if !self.discovered.contains(tv) {
+            // Dedupe by host so Bonjour + SSDP don't list the same TV twice.
+            if !self.discovered.contains(where: { $0.host == tv.host }) {
                 self.discovered.append(tv)
             }
         }
+        bonjour.start(onFound: onFound)   // primary: works with just Local Network permission
+        discovery.start(onFound: onFound) // secondary: SSDP (needs multicast entitlement)
     }
 
     func stopDiscovery() {
+        bonjour.stop()
         discovery.stop()
         if status == .discovering { status = .disconnected }
     }
@@ -73,6 +78,7 @@ final class TVConnectionManager {
 
     /// Connect to a known/saved TV. If it already has a client-key the TV won't prompt.
     func connect(to device: TVDevice) {
+        bonjour.stop()
         discovery.stop()
         pendingDevice = device
         capturedClientKey = device.clientKey
