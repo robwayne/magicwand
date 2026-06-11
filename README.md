@@ -21,11 +21,13 @@ WebSocket protocol for control, and uses **AirPlay** for the media-casting tab.
 webOS launch-points (Netflix, YouTube, Disney+, Prime Video, …).
 
 ### Connection / onboarding flow
-1. **Setting up** (`SearchingView`) — SSDP discovery scan.
-2. **Connect your TV** (`SelectTVView`) — pick from discovered TVs; Refresh; or
-   **"I don't see the device"** → manual IP entry.
-3. **Let's pair your phone with the TV** (`PairingView`) — enter the PIN webOS shows on
+1. **Connect your TV** (`SelectTVView`) — discovery runs immediately; pick from the
+   discovered TVs; Refresh; or **"I don't see the device"** → manual IP entry.
+2. **Let's pair your phone with the TV** (`PairingView`) — enter the PIN webOS shows on
    the TV; we send it via `ssap://pairing/setPin` and persist the returned client-key.
+
+On later launches the app skips onboarding entirely, lands on the Remote page, and
+silently reconnects to the last TV with its stored client-key.
 
 ## Building
 

@@ -11,7 +11,7 @@ struct PairingView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            StepDots(total: 4, current: 3)
+            StepDots(total: 2, current: 1)
                 .padding(.top, 24)
 
             Text("Let's pair your phone with the TV")

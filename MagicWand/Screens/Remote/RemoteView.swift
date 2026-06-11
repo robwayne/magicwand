@@ -25,7 +25,7 @@ struct RemoteView: View {
                         numberKeyboardRow
                         DirectionalPad(
                             onDirection: { connection.sendButton($0) },
-                            onSelect: { connection.click() }
+                            onSelect: { connection.sendButton(.enter) }
                         )
                         backExitRow
                         bottomRow

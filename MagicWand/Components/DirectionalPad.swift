@@ -1,15 +1,12 @@
 import SwiftUI
 
-/// The large central navigation surface from the remote screen.
-///
-/// Acts as both a D-pad (tap the edges / swipe to move focus and send UP/DOWN/LEFT/RIGHT)
-/// and a tap-to-select in the middle (ENTER). Edge chevrons hint at the directions.
+/// The central navigation control from the remote screen: four tappable directional
+/// arrows around a central OK/ENTER button. Each press is sent to the TV over the
+/// webOS pointer-input socket. (A swipe anywhere on the pad also nudges the direction,
+/// for trackpad-style use.)
 struct DirectionalPad: View {
     var onDirection: (RemoteButton) -> Void
     var onSelect: () -> Void
-
-    @State private var dragStart: CGPoint?
-    private let swipeThreshold: CGFloat = 28
 
     var body: some View {
         ZStack {
@@ -17,59 +14,91 @@ struct DirectionalPad: View {
                 .fill(Theme.trackpad)
                 .overlay(
                     RoundedRectangle(cornerRadius: 36, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.04), lineWidth: 1)
+                        .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
                 )
 
-            // Directional chevrons.
-            VStack {
-                chevron("chevron.up")
-                Spacer()
-                chevron("chevron.down")
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    Color.clear
+                    arrow(.up, "chevron.up")
+                    Color.clear
+                }
+                GridRow {
+                    arrow(.left, "chevron.left")
+                    centerButton
+                    arrow(.right, "chevron.right")
+                }
+                GridRow {
+                    Color.clear
+                    arrow(.down, "chevron.down")
+                    Color.clear
+                }
             }
-            .padding(.vertical, 18)
-
-            HStack {
-                chevron("chevron.left")
-                Spacer()
-                chevron("chevron.right")
-            }
-            .padding(.horizontal, 18)
-
-            // Centre select dot.
-            Circle()
-                .fill(Color.white.opacity(0.18))
-                .frame(width: 10, height: 10)
+            .padding(10)
         }
-        .frame(height: 230)
+        .frame(height: 250)
         .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    if dragStart == nil { dragStart = value.startLocation }
-                }
-                .onEnded { value in
-                    defer { dragStart = nil }
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    // A near-stationary touch counts as a centre press.
-                    if abs(dx) < swipeThreshold && abs(dy) < swipeThreshold {
-                        Haptics.tap()
-                        onSelect()
-                        return
-                    }
-                    Haptics.tap()
-                    if abs(dx) > abs(dy) {
-                        onDirection(dx > 0 ? .right : .left)
-                    } else {
-                        onDirection(dy > 0 ? .down : .up)
-                    }
-                }
-        )
+        .highPriorityGesture(swipeGesture)
     }
 
-    private func chevron(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(Theme.textTertiary)
+    // MARK: - Pieces
+
+    private func arrow(_ button: RemoteButton, _ symbol: String) -> some View {
+        Button {
+            Haptics.tap()
+            onDirection(button)
+        } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Theme.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PadPressStyle())
+    }
+
+    private var centerButton: some View {
+        Button {
+            Haptics.tap()
+            onSelect()
+        } label: {
+            Text("OK")
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(Theme.textPrimary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.08))
+                        .overlay(Circle().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+                        .padding(8)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(PadPressStyle())
+    }
+
+    /// Swiping across the pad sends a single directional press in the dominant axis.
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                Haptics.tap()
+                if abs(dx) > abs(dy) {
+                    onDirection(dx > 0 ? .right : .left)
+                } else {
+                    onDirection(dy > 0 ? .down : .up)
+                }
+            }
+    }
+}
+
+/// Press feedback for the pad buttons.
+private struct PadPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

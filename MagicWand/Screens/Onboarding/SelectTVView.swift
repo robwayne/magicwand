@@ -8,7 +8,7 @@ struct SelectTVView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            StepDots(total: 4, current: 2)
+            StepDots(total: 2, current: 0)
                 .padding(.top, 24)
 
             VStack(spacing: 8) {
