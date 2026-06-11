@@ -33,6 +33,7 @@ final class TVConnectionManager {
     private let client = SSAPClient()
     private let discovery = SSDPDiscovery()
     private let bonjour = BonjourDiscovery()
+    private let scanner = SubnetScanner()
     private var pendingDevice: TVDevice?
     private var capturedClientKey: String?
 
@@ -56,11 +57,13 @@ final class TVConnectionManager {
         }
         bonjour.start(onFound: onFound)   // primary: works with just Local Network permission
         discovery.start(onFound: onFound) // secondary: SSDP (needs multicast entitlement)
+        scanner.start(onFound: onFound)   // fallback: probe the /24 subnet for the webOS port
     }
 
     func stopDiscovery() {
         bonjour.stop()
         discovery.stop()
+        scanner.stop()
         if status == .discovering { status = .disconnected }
     }
 
@@ -80,6 +83,7 @@ final class TVConnectionManager {
     func connect(to device: TVDevice) {
         bonjour.stop()
         discovery.stop()
+        scanner.stop()
         pendingDevice = device
         capturedClientKey = device.clientKey
         status = .connecting

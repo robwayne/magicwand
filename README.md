@@ -57,7 +57,20 @@ Already configured in `MagicWand/Info.plist`:
   special entitlement. Find the TV's IP under *Settings › Network* on the TV.
 - **Access Wi-Fi Information** is *not* required.
 
-## webOS protocol notes
+## TV discovery (how the app finds your TV)
+
+Discovery runs three strategies together and merges the results (deduped by IP):
+
+1. **Bonjour / mDNS** (`BonjourDiscovery`) — primary. Browses AirPlay/RAOP/LG service
+   types via `NWBrowser`. Works with only the **Local Network** permission.
+2. **Subnet scan** (`SubnetScanner`) — fallback. Probes the phone's local /24 for the
+   webOS control port (3000). No special entitlement needed; finds the TV even when
+   Bonjour/SSDP are unavailable, so you never have to type an IP.
+3. **SSDP** (`SSDPDiscovery`) — optional. Requires the **Multicast Networking**
+   entitlement (Apple approval); harmless no-op without it.
+
+Manual IP entry ("I don't see the device") remains as a last resort.
+
 
 - Control socket: `ws://<tv>:3000` (plain) or `wss://<tv>:3001` (TLS, self-signed cert is
   trusted by `SSAPClient`'s `URLSessionDelegate`).
