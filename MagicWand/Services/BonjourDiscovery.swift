@@ -120,7 +120,7 @@ final class BonjourDiscovery {
 
     /// Extract a usable IPv4 string (or hostname) from a resolved endpoint, dropping
     /// the interface zone and skipping IPv6 (webOS control prefers IPv4).
-    private static func host(from endpoint: NWEndpoint) -> String? {
+    nonisolated private static func host(from endpoint: NWEndpoint) -> String? {
         guard case let .hostPort(host, _) = endpoint else { return nil }
         switch host {
         case .ipv4(let address):
