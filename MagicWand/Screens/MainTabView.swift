@@ -7,6 +7,7 @@ struct MainTabView: View {
         case casting, remote, library
     }
 
+    @Environment(TVConnectionManager.self) private var connection
     @State private var selection: Tab = .remote
 
     var body: some View {
@@ -28,5 +29,15 @@ struct MainTabView: View {
         .overlay(alignment: .bottomTrailing) {
             AppShortcutsButton()
         }
+        .overlay(alignment: .top) {
+            if let toast = connection.toast {
+                ToastBanner(text: toast)
+                    .task(id: toast) {
+                        try? await Task.sleep(for: .seconds(4))
+                        connection.clearToast()
+                    }
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: connection.toast)
     }
 }

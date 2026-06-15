@@ -35,6 +35,9 @@ final class TVConnectionManager {
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
 
+    /// Transient banner message (e.g. a launch error reported by the TV), shown briefly.
+    var toast: String?
+
     /// Real launch-points reported by the TV (id + title), used to resolve app launches.
     private(set) var installedApps: [InstalledApp] = []
 
@@ -262,17 +265,30 @@ final class TVConnectionManager {
         if installedApps.isEmpty {
             fetchLaunchPoints { [weak self] in
                 guard let self else { return }
-                self.client.send(.launchApp(appId: self.resolveLaunchId(for: app)))
+                self.launch(appId: self.resolveLaunchId(for: app), label: app.name)
             }
         } else {
-            client.send(.launchApp(appId: resolveLaunchId(for: app)))
+            launch(appId: resolveLaunchId(for: app), label: app.name)
         }
     }
 
     /// Launch a specific TV launch-point id directly (from the "Apps on this TV" list).
-    func launch(appId: String) {
-        client.send(.launchApp(appId: appId))
+    func launch(appId: String, label: String? = nil) {
+        let name = label ?? appId
+        client.send(.launchApp(appId: appId)) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let payload):
+                if let ret = payload["returnValue"] as? Bool, ret == false {
+                    self.toast = "TV refused to launch \(name)."
+                }
+            case .failure(let error):
+                self.toast = "Couldn't launch \(name): \(error.localizedDescription)"
+            }
+        }
     }
+
+    func clearToast() { toast = nil }
 
     /// Match a known app to the TV's actual launch-point id, by normalized title first
     /// (most reliable across regions/firmware), then by the best-effort default id.

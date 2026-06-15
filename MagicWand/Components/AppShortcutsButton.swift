@@ -21,16 +21,26 @@ struct AppShortcutsButton: View {
             Haptics.tap()
             showShortcuts = true
         } label: {
-            Image(systemName: "bolt.fill")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 58, height: 58)
-                .background(
-                    Circle()
-                        .fill(Theme.accent)
-                        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-                )
-                .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+            ZStack {
+                Circle()
+                    .fill(Theme.accent)
+                    .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1)
+
+                // Apps grid with a lightning-bolt badge = "quick launch apps".
+                Image(systemName: "square.grid.2x2.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 12, weight: .black))
+                            .foregroundStyle(Theme.accent)
+                            .padding(2)
+                            .background(Circle().fill(.white))
+                            .offset(x: 9, y: 9)
+                    }
+            }
+            .frame(width: 58, height: 58)
         }
         .buttonStyle(.plain)
         .padding(.trailing, 18)
