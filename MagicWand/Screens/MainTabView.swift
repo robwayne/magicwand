@@ -24,5 +24,9 @@ struct MainTabView: View {
                 .tag(Tab.library)
         }
         .tint(Theme.accent)
+        // Floating quick-launch shortcut, above all tabs.
+        .overlay(alignment: .bottomTrailing) {
+            AppShortcutsButton()
+        }
     }
 }

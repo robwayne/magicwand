@@ -36,7 +36,7 @@ struct DirectionalPad: View {
             }
             .padding(10)
         }
-        .frame(height: 250)
+        .frame(height: 188) // 25% smaller than the original 250pt
         .contentShape(Rectangle())
         .highPriorityGesture(swipeGesture)
     }

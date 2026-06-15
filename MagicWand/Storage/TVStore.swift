@@ -62,6 +62,11 @@ final class TVStore {
             if let date = device.lastConnected {
                 existing.lastConnected = date
             }
+            // Preserve user edits (nickname) and fill in any newly-known metadata.
+            if let nickname = device.nickname { existing.nickname = nickname }
+            if let type = device.deviceType, !type.isEmpty { existing.deviceType = type }
+            if let size = device.screenSize, !size.isEmpty { existing.screenSize = size }
+            if let ipType = device.ipType, !ipType.isEmpty { existing.ipType = ipType }
             devices[index] = existing
             persist()
             return existing
@@ -79,6 +84,13 @@ final class TVStore {
         if let key = clientKey, !key.isEmpty { updated.clientKey = key }
         let saved = upsert(updated)
         lastSelectedID = saved.id
+    }
+
+    /// Replace a stored device by id (used when editing the nickname on the detail screen).
+    func update(_ device: TVDevice) {
+        guard let index = devices.firstIndex(where: { $0.id == device.id }) else { return }
+        devices[index] = device
+        persist()
     }
 
     func remove(_ device: TVDevice) {

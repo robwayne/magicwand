@@ -49,11 +49,13 @@ struct LibraryView: View {
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 10, trailing: 16))
 
             ForEach(store.sortedForLibrary) { device in
-                TVLibraryRow(
-                    device: device,
-                    isActive: connection.activeDevice?.id == device.id
-                ) {
-                    connection.connect(to: device)
+                NavigationLink {
+                    DeviceDetailView(deviceID: device.id)
+                } label: {
+                    TVLibraryRow(
+                        device: device,
+                        isActive: connection.activeDevice?.id == device.id
+                    )
                 }
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
@@ -109,47 +111,40 @@ struct LibraryView: View {
 private struct TVLibraryRow: View {
     let device: TVDevice
     let isActive: Bool
-    var onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Theme.surfaceRaised)
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        Image(systemName: "tv")
-                            .font(.system(size: 22))
-                            .foregroundStyle(isActive ? Theme.accent : Theme.textPrimary)
-                    )
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surfaceRaised)
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Image(systemName: "tv")
+                        .font(.system(size: 22))
+                        .foregroundStyle(isActive ? Theme.accent : Theme.textPrimary)
+                )
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(device.name)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(subtitle)
-                        .font(.system(size: 13))
-                        .foregroundStyle(isActive ? Theme.accent : Theme.textSecondary)
-                }
-
-                Spacer()
-
-                if isActive {
-                    Text("Connected")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.accent)
-                } else {
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(Theme.textSecondary)
-                }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(device.displayName)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isActive ? Theme.accent : Theme.textSecondary)
             }
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(isActive ? 0.08 : 0.04))
-            )
+
+            Spacer()
+
+            if isActive {
+                Text("Connected")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(isActive ? 0.08 : 0.04))
+        )
         .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
     }
 

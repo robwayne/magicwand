@@ -35,6 +35,9 @@ final class TVConnectionManager {
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
 
+    /// Real launch-points reported by the TV (id + title), used to resolve app launches.
+    private var launchPoints: [(id: String, title: String)] = []
+
     /// Bridged to `TVStore` so successful pairings get persisted.
     var onPaired: ((TVDevice) -> Void)?
 
@@ -98,7 +101,9 @@ final class TVConnectionManager {
         let device = TVDevice(
             name: discoveredTV.name,
             modelName: discoveredTV.modelName,
-            host: discoveredTV.host
+            host: discoveredTV.host,
+            deviceType: "webOS Smart TV",
+            ipType: discoveredTV.host.contains(":") ? "IPv6" : "IPv4"
         )
         connect(to: device)
     }
@@ -144,6 +149,28 @@ final class TVConnectionManager {
         startDiscovery()
     }
 
+    /// Called when the app returns to the foreground. The control socket is dropped while
+    /// backgrounded, so silently reconnect to whatever TV we were last using.
+    func reconnectAfterForeground(using store: TVStore) {
+        guard route == .main else { return }      // don't interrupt onboarding/pairing
+        guard status != .connected, status != .connecting else { return }
+        let device = activeDevice
+            ?? store.device(withID: store.lastSelectedID)
+            ?? store.sortedForLibrary.first(where: { $0.isPaired })
+        if let device, device.isPaired {
+            connect(to: device)
+        }
+    }
+
+    /// Re-run the full pairing process for a device (clears the stored key so the TV
+    /// shows a fresh PIN). Used by the device detail screen.
+    func reestablish(_ device: TVDevice) {
+        var fresh = device
+        fresh.clientKey = nil
+        route = .onboarding
+        connect(to: fresh)
+    }
+
     // MARK: - Event handling
 
     private func handle(_ event: SSAPEvent) {
@@ -174,8 +201,21 @@ final class TVConnectionManager {
         status = .connected
         route = .main
         onPaired?(device)
-        // Sync the mute indicator once connected.
+        // Sync the mute indicator and fetch the TV's real app list once connected.
         refreshVolume()
+        fetchLaunchPoints()
+    }
+
+    private func fetchLaunchPoints() {
+        client.send(.listApps) { [weak self] result in
+            guard let self, case .success(let payload) = result,
+                  let points = payload["launchPoints"] as? [[String: Any]] else { return }
+            self.launchPoints = points.compactMap { point in
+                guard let id = point["id"] as? String,
+                      let title = point["title"] as? String else { return nil }
+                return (id: id, title: title)
+            }
+        }
     }
 
     // MARK: - Commands (high level)
@@ -205,7 +245,28 @@ final class TVConnectionManager {
     func powerOff() { client.send(.turnOff) }
 
     func launchApp(_ app: StreamingApp) {
-        client.send(.launchApp(appId: app.webOSId))
+        client.send(.launchApp(appId: resolveLaunchId(for: app)))
+    }
+
+    /// Match a known app to the TV's actual launch-point id, by title first (most
+    /// reliable across regions/firmware), then by the best-effort default id.
+    private func resolveLaunchId(for app: StreamingApp) -> String {
+        let name = app.name.lowercased()
+        let token = name.replacingOccurrences(of: "+", with: "").trimmingCharacters(in: .whitespaces)
+
+        if let exact = launchPoints.first(where: { $0.title.lowercased() == name }) {
+            return exact.id
+        }
+        if let partial = launchPoints.first(where: {
+            let title = $0.title.lowercased()
+            return !token.isEmpty && (title.contains(token) || token.contains(title))
+        }) {
+            return partial.id
+        }
+        if let byId = launchPoints.first(where: { $0.id == app.webOSId }) {
+            return byId.id
+        }
+        return app.webOSId
     }
 
     func openBrowser(_ urlString: String = "https://www.google.com") {

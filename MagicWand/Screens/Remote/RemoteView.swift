@@ -143,15 +143,21 @@ struct RemoteView: View {
             }
             .overlay(ColorDots())
 
-            RemoteKey(content: .text("Apps"), fill: Theme.surfaceRaised) {
+            Button {
+                Haptics.tap()
                 showApps = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.on.square")
+                        .font(.system(size: 16, weight: .medium))
+                    Text("Apps")
+                        .font(.system(size: 17, weight: .semibold))
+                }
+                .foregroundStyle(Theme.textPrimary)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .remoteKeyBackground()
             }
-            .overlay(alignment: .leading) {
-                Image(systemName: "square.on.square")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Theme.textPrimary)
-                    .padding(.leading, 26)
-            }
+            .buttonStyle(.plain)
 
             RemoteKey(content: .symbol(isPlaying ? "playpause.fill" : "play.fill")) {
                 isPlaying.toggle()
