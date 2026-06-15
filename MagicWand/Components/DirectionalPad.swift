@@ -2,8 +2,7 @@ import SwiftUI
 
 /// The central navigation control from the remote screen: four tappable directional
 /// arrows around a central OK/ENTER button. Each press is sent to the TV over the
-/// webOS pointer-input socket. (A swipe anywhere on the pad also nudges the direction,
-/// for trackpad-style use.)
+/// webOS pointer-input socket. Holding an arrow auto-repeats it, like a held remote key.
 struct DirectionalPad: View {
     var onDirection: (RemoteButton) -> Void
     var onSelect: () -> Void
@@ -38,14 +37,12 @@ struct DirectionalPad: View {
         }
         .frame(height: 188) // 25% smaller than the original 250pt
         .contentShape(Rectangle())
-        .highPriorityGesture(swipeGesture)
     }
 
     // MARK: - Pieces
 
     private func arrow(_ button: RemoteButton, _ symbol: String) -> some View {
-        Button {
-            Haptics.tap()
+        HoldRepeatButton {
             onDirection(button)
         } label: {
             Image(systemName: symbol)
@@ -54,7 +51,6 @@ struct DirectionalPad: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(PadPressStyle())
     }
 
     private var centerButton: some View {
@@ -75,21 +71,6 @@ struct DirectionalPad: View {
                 .contentShape(Circle())
         }
         .buttonStyle(PadPressStyle())
-    }
-
-    /// Swiping across the pad sends a single directional press in the dominant axis.
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 24)
-            .onEnded { value in
-                let dx = value.translation.width
-                let dy = value.translation.height
-                Haptics.tap()
-                if abs(dx) > abs(dy) {
-                    onDirection(dx > 0 ? .right : .left)
-                } else {
-                    onDirection(dy > 0 ? .down : .up)
-                }
-            }
     }
 }
 

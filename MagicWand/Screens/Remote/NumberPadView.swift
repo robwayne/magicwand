@@ -28,8 +28,15 @@ struct NumberPadView: View {
                 ForEach(rows.indices, id: \.self) { r in
                     HStack(spacing: 14) {
                         ForEach(rows[r], id: \.self) { button in
-                            RemoteKey(content: .text(label(for: button))) {
+                            // Hold to auto-repeat, emulating a held physical number key.
+                            HoldRepeatButton {
                                 onDigit(button)
+                            } label: {
+                                Text(label(for: button))
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(Theme.textPrimary)
+                                    .frame(maxWidth: .infinity, minHeight: 56)
+                                    .remoteKeyBackground()
                             }
                         }
                     }
