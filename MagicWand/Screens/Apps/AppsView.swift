@@ -10,6 +10,7 @@ struct AppsView: View {
 
     @State private var query = ""
     @State private var showAddSheet = false
+    @State private var showInstalled = false
     @State private var editMode: EditMode = .inactive
 
     private var filtered: [StreamingApp] {
@@ -26,6 +27,7 @@ struct AppsView: View {
                 Theme.onboardingGradient.ignoresSafeArea()
                 VStack(spacing: 14) {
                     searchField
+                    installedAppsButton
                     list
                 }
                 .padding(.top, 8)
@@ -56,7 +58,33 @@ struct AppsView: View {
             .sheet(isPresented: $showAddSheet) {
                 AddAppSheet()
             }
+            .sheet(isPresented: $showInstalled) {
+                InstalledAppsSheet()
+            }
         }
+    }
+
+    private var installedAppsButton: some View {
+        Button {
+            connection.refreshInstalledApps()
+            showInstalled = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "tv.badge.wifi")
+                Text("Apps installed on this TV")
+                    .font(.system(size: 15, weight: .medium))
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption)
+            }
+            .foregroundStyle(Theme.textPrimary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .disabled(!connection.status.isConnected)
+        .opacity(connection.status.isConnected ? 1 : 0.5)
     }
 
     private var searchField: some View {
@@ -191,6 +219,68 @@ private struct AddAppSheet: View {
                 }
             }
             .navigationTitle("Add App")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }.tint(Theme.accent)
+                }
+            }
+        }
+    }
+}
+
+/// Lists the apps actually installed on the connected TV (with their real launch ids)
+/// and launches them directly. Guarantees correct launching for any installed app.
+private struct InstalledAppsSheet: View {
+    @Environment(TVConnectionManager.self) private var connection
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private var filtered: [TVConnectionManager.InstalledApp] {
+        guard !query.isEmpty else { return connection.installedApps }
+        return connection.installedApps.filter {
+            $0.title.localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.onboardingGradient.ignoresSafeArea()
+                if connection.installedApps.isEmpty {
+                    ContentUnavailableView {
+                        Label("No apps found yet", systemImage: "tv")
+                    } description: {
+                        Text("Make sure the TV is connected, then pull to refresh.")
+                    }
+                    .foregroundStyle(Theme.textPrimary)
+                } else {
+                    List {
+                        ForEach(filtered) { app in
+                            Button {
+                                Haptics.tap()
+                                connection.launch(appId: app.id)
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(app.title)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundStyle(Theme.textPrimary)
+                                    Text(app.id)
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                            }
+                            .listRowBackground(Color.clear)
+                        }
+                    }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
+                    .searchable(text: $query)
+                    .refreshable { connection.refreshInstalledApps() }
+                }
+            }
+            .navigationTitle("Apps on This TV")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

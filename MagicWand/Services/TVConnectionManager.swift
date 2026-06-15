@@ -36,7 +36,12 @@ final class TVConnectionManager {
     private(set) var volumeMuted = false
 
     /// Real launch-points reported by the TV (id + title), used to resolve app launches.
-    private var launchPoints: [(id: String, title: String)] = []
+    private(set) var installedApps: [InstalledApp] = []
+
+    struct InstalledApp: Identifiable, Hashable {
+        let id: String
+        let title: String
+    }
 
     /// Bridged to `TVStore` so successful pairings get persisted.
     var onPaired: ((TVDevice) -> Void)?
@@ -206,15 +211,22 @@ final class TVConnectionManager {
         fetchLaunchPoints()
     }
 
-    private func fetchLaunchPoints() {
+    /// Re-fetch the TV's installed apps (used by the "Apps on this TV" list).
+    func refreshInstalledApps() { fetchLaunchPoints() }
+
+    private func fetchLaunchPoints(completion: (() -> Void)? = nil) {
         client.send(.listApps) { [weak self] result in
-            guard let self, case .success(let payload) = result,
-                  let points = payload["launchPoints"] as? [[String: Any]] else { return }
-            self.launchPoints = points.compactMap { point in
-                guard let id = point["id"] as? String,
-                      let title = point["title"] as? String else { return nil }
-                return (id: id, title: title)
+            guard let self else { return }
+            if case .success(let payload) = result,
+               let points = payload["launchPoints"] as? [[String: Any]] {
+                self.installedApps = points.compactMap { point in
+                    guard let id = point["id"] as? String,
+                          let title = point["title"] as? String else { return nil }
+                    return InstalledApp(id: id, title: title)
+                }
+                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             }
+            completion?()
         }
     }
 
@@ -245,28 +257,49 @@ final class TVConnectionManager {
     func powerOff() { client.send(.turnOff) }
 
     func launchApp(_ app: StreamingApp) {
-        client.send(.launchApp(appId: resolveLaunchId(for: app)))
+        // If we haven't received the TV's app list yet, fetch it first so we can resolve
+        // the real launch-point id (fixes apps whose default id is wrong, e.g. Disney+).
+        if installedApps.isEmpty {
+            fetchLaunchPoints { [weak self] in
+                guard let self else { return }
+                self.client.send(.launchApp(appId: self.resolveLaunchId(for: app)))
+            }
+        } else {
+            client.send(.launchApp(appId: resolveLaunchId(for: app)))
+        }
     }
 
-    /// Match a known app to the TV's actual launch-point id, by title first (most
-    /// reliable across regions/firmware), then by the best-effort default id.
-    private func resolveLaunchId(for app: StreamingApp) -> String {
-        let name = app.name.lowercased()
-        let token = name.replacingOccurrences(of: "+", with: "").trimmingCharacters(in: .whitespaces)
+    /// Launch a specific TV launch-point id directly (from the "Apps on this TV" list).
+    func launch(appId: String) {
+        client.send(.launchApp(appId: appId))
+    }
 
-        if let exact = launchPoints.first(where: { $0.title.lowercased() == name }) {
+    /// Match a known app to the TV's actual launch-point id, by normalized title first
+    /// (most reliable across regions/firmware), then by the best-effort default id.
+    private func resolveLaunchId(for app: StreamingApp) -> String {
+        let target = Self.normalize(app.name)
+
+        if let exact = installedApps.first(where: { Self.normalize($0.title) == target }) {
             return exact.id
         }
-        if let partial = launchPoints.first(where: {
-            let title = $0.title.lowercased()
-            return !token.isEmpty && (title.contains(token) || token.contains(title))
+        if !target.isEmpty, let partial = installedApps.first(where: {
+            let title = Self.normalize($0.title)
+            return title.contains(target) || target.contains(title)
         }) {
             return partial.id
         }
-        if let byId = launchPoints.first(where: { $0.id == app.webOSId }) {
+        if let byId = installedApps.first(where: { $0.id == app.webOSId }) {
             return byId.id
         }
         return app.webOSId
+    }
+
+    /// Lowercase, drop the word "plus"/"+", and keep only alphanumerics so titles like
+    /// "Disney+", "Disney Plus", and "Prime Video" all compare cleanly.
+    private static func normalize(_ string: String) -> String {
+        string.lowercased()
+            .replacingOccurrences(of: "plus", with: "")
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     func openBrowser(_ urlString: String = "https://www.google.com") {
