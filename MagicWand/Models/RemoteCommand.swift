@@ -53,6 +53,7 @@ enum SSAPRequest {
     case launchApp(appId: String)
     case openURL(target: String)
     case listApps
+    case listAllApps
     case getForegroundAppInfo
     case insertText(String)
     case sendEnterKey
@@ -75,6 +76,7 @@ enum SSAPRequest {
         case .launchApp: "ssap://system.launcher/launch"
         case .openURL: "ssap://system.launcher/open"
         case .listApps: "ssap://com.webos.applicationManager/listLaunchPoints"
+        case .listAllApps: "ssap://com.webos.applicationManager/listApps"
         case .getForegroundAppInfo: "ssap://com.webos.applicationManager/getForegroundAppInfo"
         case .insertText: "ssap://com.webos.service.ime/insertText"
         case .sendEnterKey: "ssap://com.webos.service.ime/sendEnterKey"

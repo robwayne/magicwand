@@ -228,19 +228,34 @@ final class TVConnectionManager {
     func refreshInstalledApps() { fetchLaunchPoints() }
 
     private func fetchLaunchPoints(completion: (() -> Void)? = nil) {
+        // Primary source: the home-screen launch points.
         client.send(.listApps) { [weak self] result in
             guard let self else { return }
-            if case .success(let payload) = result,
-               let points = payload["launchPoints"] as? [[String: Any]] {
-                self.installedApps = points.compactMap { point in
-                    guard let id = point["id"] as? String,
-                          let title = point["title"] as? String else { return nil }
-                    return InstalledApp(id: id, title: title)
-                }
-                .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            let points = Self.parseApps(result, key: "launchPoints")
+            if !points.isEmpty {
+                self.installedApps = points
+                completion?()
+                return
             }
-            completion?()
+            // Fallback: the full installed-apps list (different API / permission).
+            self.client.send(.listAllApps) { [weak self] result2 in
+                guard let self else { return }
+                let apps = Self.parseApps(result2, key: "apps")
+                if !apps.isEmpty { self.installedApps = apps }
+                completion?()
+            }
         }
+    }
+
+    private static func parseApps(_ result: Result<[String: Any], Error>, key: String) -> [InstalledApp] {
+        guard case .success(let payload) = result,
+              let entries = payload[key] as? [[String: Any]] else { return [] }
+        return entries.compactMap { entry in
+            guard let id = entry["id"] as? String,
+                  let title = entry["title"] as? String else { return nil }
+            return InstalledApp(id: id, title: title)
+        }
+        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
     // MARK: - Commands (high level)
@@ -290,10 +305,10 @@ final class TVConnectionManager {
             switch result {
             case .success(let payload):
                 if let ret = payload["returnValue"] as? Bool, ret == false {
-                    self.toast = "TV refused to launch \(name)."
+                    self.toast = "TV refused to launch \(name) [id: \(appId)]."
                 }
             case .failure(let error):
-                self.toast = "Couldn't launch \(name): \(error.localizedDescription)"
+                self.toast = "Couldn't launch \(name) [id: \(appId)]: \(error.localizedDescription)"
             }
         }
     }
