@@ -115,4 +115,5 @@ private struct PhotoStackArt: View {
 #Preview {
     CastingView()
         .environment(TVConnectionManager())
+        .environment(TVStore())
 }

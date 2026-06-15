@@ -8,7 +8,7 @@ struct ConnectionHeader: View {
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(connection.activeDevice?.name ?? "LG TV UP7500PVG")
+                Text(connection.activeDevice?.displayName ?? "LG TV UP7500PVG")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Theme.textSecondary)
                 Text(statusText)
@@ -16,8 +16,7 @@ struct ConnectionHeader: View {
                     .foregroundStyle(connection.status.isConnected ? Theme.textSecondary : Theme.danger)
             }
             Spacer()
-            AirPlayRoutePicker()
-                .frame(width: 30, height: 30)
+            RefreshConnectionButton()
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The primary remote-control screen. Layout mirrors the reference app:
 /// power/browser/input row, channel & volume rockers around a 2×2 of
@@ -53,6 +54,10 @@ struct RemoteView: View {
             RemoteKey(content: .symbol("power"), tint: Theme.danger) {
                 connection.powerOff()
             }
+            // AirPlay route picker, styled like a remote key.
+            AirPlayRoutePicker(tint: UIColor(Theme.textPrimary))
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .remoteKeyBackground()
             RemoteKey(content: .symbol("globe")) {
                 connection.openBrowser()
             }

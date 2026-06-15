@@ -139,6 +139,9 @@ private struct TVLibraryRow: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.accent)
             }
+
+            // Inline refresh: reconnect to this TV without opening the detail view.
+            RefreshConnectionButton(device: device)
         }
         .padding(14)
         .background(

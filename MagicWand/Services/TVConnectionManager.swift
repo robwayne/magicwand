@@ -170,6 +170,16 @@ final class TVConnectionManager {
         }
     }
 
+    /// Force a reconnect to the active (or last-used) TV. Used by the refresh buttons.
+    func refreshConnection(using store: TVStore) {
+        let device = activeDevice
+            ?? store.device(withID: store.lastSelectedID)
+            ?? store.sortedForLibrary.first(where: { $0.isPaired })
+        if let device, device.isPaired {
+            connect(to: device)
+        }
+    }
+
     /// Re-run the full pairing process for a device (clears the stored key so the TV
     /// shows a fresh PIN). Used by the device detail screen.
     func reestablish(_ device: TVDevice) {
