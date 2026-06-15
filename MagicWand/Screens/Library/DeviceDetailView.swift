@@ -15,7 +15,7 @@ struct DeviceDetailView: View {
     @State private var monitoringRefresh = false
     @State private var showDeleteConfirm = false
 
-    private enum RefreshState {
+    private enum RefreshState: Equatable {
         case idle, failed, success
         var color: Color {
             switch self {
@@ -182,5 +182,3 @@ struct DeviceDetailView: View {
         }
     }
 }
-
-extension DeviceDetailView.RefreshState: Equatable {}
