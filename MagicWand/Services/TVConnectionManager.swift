@@ -229,27 +229,48 @@ final class TVConnectionManager {
     /// Re-fetch the TV's installed apps (used by the "Apps on this TV" list).
     func refreshInstalledApps() { fetchLaunchPoints() }
 
+    private var fetchToken = UUID()
+
     private func fetchLaunchPoints(completion: (() -> Void)? = nil) {
         appListError = nil
+        let token = UUID()
+        fetchToken = token
+
+        func finish() {
+            guard fetchToken == token else { return }
+            fetchToken = UUID() // invalidate; ignore any late responses
+            completion?()
+        }
+
+        // Guarantee feedback even if the TV never replies.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6))
+            guard fetchToken == token else { return }
+            if installedApps.isEmpty {
+                appListError = appListError ?? "no response from TV (timed out)"
+            }
+            finish()
+        }
+
         // Primary source: the home-screen launch points.
         client.send(.listApps) { [weak self] result in
-            guard let self else { return }
+            guard let self, self.fetchToken == token else { return }
             let (points, error1) = Self.parseApps(result, key: "launchPoints")
             if !points.isEmpty {
                 self.installedApps = points
-                completion?()
+                finish()
                 return
             }
             // Fallback: the full installed-apps list (different API / permission).
             self.client.send(.listAllApps) { [weak self] result2 in
-                guard let self else { return }
+                guard let self, self.fetchToken == token else { return }
                 let (apps, error2) = Self.parseApps(result2, key: "apps")
                 if !apps.isEmpty {
                     self.installedApps = apps
                 } else {
                     self.appListError = error1 ?? error2 ?? "no apps returned"
                 }
-                completion?()
+                finish()
             }
         }
     }

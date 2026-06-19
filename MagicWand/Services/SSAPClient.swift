@@ -78,6 +78,9 @@ final class SSAPClient: NSObject {
         onEvent?(.connecting)
 
         let task = session.webSocketTask(with: url)
+        // webOS replies (e.g. listLaunchPoints with app icons) can exceed the default
+        // 1 MB limit, which would silently drop the message. Allow much larger frames.
+        task.maximumMessageSize = 16 * 1024 * 1024
         self.socket = task
         task.resume()
         receiveLoop(on: task)
@@ -210,6 +213,7 @@ final class SSAPClient: NSObject {
 
     private func openPointerSocket(_ url: URL) {
         let task = session.webSocketTask(with: url)
+        task.maximumMessageSize = 16 * 1024 * 1024
         pointerSocket = task
         task.resume()
         // The pointer socket only needs a drain loop to stay alive.
