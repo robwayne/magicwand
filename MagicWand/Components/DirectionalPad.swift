@@ -54,8 +54,7 @@ struct DirectionalPad: View {
     }
 
     private var centerButton: some View {
-        Button {
-            Haptics.tap()
+        HoldRepeatButton {
             onSelect()
         } label: {
             Text("OK")
@@ -70,7 +69,6 @@ struct DirectionalPad: View {
                 )
                 .contentShape(Circle())
         }
-        .buttonStyle(PadPressStyle())
     }
 }
 
