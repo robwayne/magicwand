@@ -251,7 +251,8 @@ private struct InstalledAppsSheet: View {
                     ContentUnavailableView {
                         Label("No apps found yet", systemImage: "tv")
                     } description: {
-                        Text("Make sure the TV is connected, then pull to refresh.")
+                        Text(connection.appListError.map { "The TV reported: \($0)" }
+                             ?? "Make sure the TV is connected, then pull to refresh.")
                     }
                     .foregroundStyle(Theme.textPrimary)
                 } else {

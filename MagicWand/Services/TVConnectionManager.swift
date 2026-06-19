@@ -40,6 +40,8 @@ final class TVConnectionManager {
 
     /// Real launch-points reported by the TV (id + title), used to resolve app launches.
     private(set) var installedApps: [InstalledApp] = []
+    /// Why the installed-app list couldn't be read, if it failed (for diagnostics/UI).
+    private(set) var appListError: String?
 
     struct InstalledApp: Identifiable, Hashable {
         let id: String
@@ -228,10 +230,11 @@ final class TVConnectionManager {
     func refreshInstalledApps() { fetchLaunchPoints() }
 
     private func fetchLaunchPoints(completion: (() -> Void)? = nil) {
+        appListError = nil
         // Primary source: the home-screen launch points.
         client.send(.listApps) { [weak self] result in
             guard let self else { return }
-            let points = Self.parseApps(result, key: "launchPoints")
+            let (points, error1) = Self.parseApps(result, key: "launchPoints")
             if !points.isEmpty {
                 self.installedApps = points
                 completion?()
@@ -240,22 +243,39 @@ final class TVConnectionManager {
             // Fallback: the full installed-apps list (different API / permission).
             self.client.send(.listAllApps) { [weak self] result2 in
                 guard let self else { return }
-                let apps = Self.parseApps(result2, key: "apps")
-                if !apps.isEmpty { self.installedApps = apps }
+                let (apps, error2) = Self.parseApps(result2, key: "apps")
+                if !apps.isEmpty {
+                    self.installedApps = apps
+                } else {
+                    self.appListError = error1 ?? error2 ?? "no apps returned"
+                }
                 completion?()
             }
         }
     }
 
-    private static func parseApps(_ result: Result<[String: Any], Error>, key: String) -> [InstalledApp] {
-        guard case .success(let payload) = result,
-              let entries = payload[key] as? [[String: Any]] else { return [] }
-        return entries.compactMap { entry in
-            guard let id = entry["id"] as? String,
-                  let title = entry["title"] as? String else { return nil }
-            return InstalledApp(id: id, title: title)
+    /// Parse an app/launch-point list response, returning the apps and (if it failed)
+    /// a short reason string for diagnostics.
+    private static func parseApps(_ result: Result<[String: Any], Error>,
+                                  key: String) -> ([InstalledApp], String?) {
+        switch result {
+        case .failure(let error):
+            return ([], error.localizedDescription)
+        case .success(let payload):
+            guard let entries = payload[key] as? [[String: Any]] else {
+                if let ret = payload["returnValue"] as? Bool, ret == false {
+                    return ([], (payload["errorText"] as? String) ?? "request returned false")
+                }
+                return ([], "missing \"\(key)\" in response")
+            }
+            let apps = entries.compactMap { entry -> InstalledApp? in
+                guard let id = entry["id"] as? String,
+                      let title = entry["title"] as? String else { return nil }
+                return InstalledApp(id: id, title: title)
+            }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return (apps, apps.isEmpty ? "empty list" : nil)
         }
-        .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
     // MARK: - Commands (high level)
@@ -290,6 +310,10 @@ final class TVConnectionManager {
         if installedApps.isEmpty {
             fetchLaunchPoints { [weak self] in
                 guard let self else { return }
+                if self.installedApps.isEmpty {
+                    let reason = self.appListError.map { " (\($0))" } ?? ""
+                    self.toast = "Can't read the TV's app list\(reason); using default id for \(app.name)."
+                }
                 self.launch(appId: self.resolveLaunchId(for: app), label: app.name)
             }
         } else {
