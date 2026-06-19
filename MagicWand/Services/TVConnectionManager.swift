@@ -182,6 +182,11 @@ final class TVConnectionManager {
         }
     }
 
+    /// Re-pair the currently-active TV (e.g. to upgrade a key that lacks permissions).
+    func reestablishActive() {
+        if let device = activeDevice { reestablish(device) }
+    }
+
     /// Re-run the full pairing process for a device (clears the stored key so the TV
     /// shows a fresh PIN). Used by the device detail screen.
     func reestablish(_ device: TVDevice) {

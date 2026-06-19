@@ -243,18 +243,47 @@ private struct InstalledAppsSheet: View {
         }
     }
 
+    /// The TV rejected the app-list request for lack of permission — re-pairing fixes it.
+    private var needsRepair: Bool {
+        guard let error = connection.appListError?.lowercased() else { return false }
+        return error.contains("401") || error.contains("permission") || error.contains("denied")
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Theme.onboardingGradient.ignoresSafeArea()
                 if connection.installedApps.isEmpty {
-                    ContentUnavailableView {
-                        Label("No apps found yet", systemImage: "tv")
-                    } description: {
-                        Text(connection.appListError.map { "The TV reported: \($0)" }
-                             ?? "Make sure the TV is connected, then pull to refresh.")
+                    VStack(spacing: 16) {
+                        ContentUnavailableView {
+                            Label("No apps found yet", systemImage: "tv")
+                        } description: {
+                            Text(connection.appListError.map { "The TV reported: \($0)" }
+                                 ?? "Make sure the TV is connected, then pull to refresh.")
+                        }
+                        .foregroundStyle(Theme.textPrimary)
+
+                        if needsRepair {
+                            VStack(spacing: 8) {
+                                Text("This pairing wasn't granted permission to read apps. Re-pair to fix it.")
+                                    .font(.footnote)
+                                    .foregroundStyle(Theme.textSecondary)
+                                    .multilineTextAlignment(.center)
+                                    .padding(.horizontal, 32)
+                                Button {
+                                    connection.reestablishActive()
+                                    dismiss()
+                                } label: {
+                                    Label("Re-pair TV", systemImage: "wifi.router")
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 12)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Theme.accent)
+                            }
+                        }
                     }
-                    .foregroundStyle(Theme.textPrimary)
                 } else {
                     List {
                         ForEach(filtered) { app in
