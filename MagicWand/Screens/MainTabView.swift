@@ -38,6 +38,14 @@ struct MainTabView: View {
                     }
             }
         }
+        .overlay(alignment: .leading) {
+            if connection.isVolumeHUDVisible {
+                VolumeHUD()
+                    .padding(.leading, 16)
+                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: connection.toast)
+        .animation(.spring(response: 0.32, dampingFraction: 0.8), value: connection.isVolumeHUDVisible)
     }
 }

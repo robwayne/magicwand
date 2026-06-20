@@ -50,8 +50,10 @@ final class SSAPClient: NSObject {
 
     private var device: TVDevice?
     private var commandCounter = 0
-    /// Pending SSAP responses keyed by message id.
+    /// Pending one-shot SSAP responses keyed by message id.
     private var pending: [String: (Result<[String: Any], Error>) -> Void] = [:]
+    /// Long-lived subscription handlers keyed by message id (kept across pushes).
+    private var subscriptions: [String: (Result<[String: Any], Error>) -> Void] = [:]
 
     private var registerMessageID: String?
     private var didReportReady = false
@@ -93,6 +95,7 @@ final class SSAPClient: NSObject {
         pointerSocket = nil
         socket = nil
         pending.removeAll()
+        subscriptions.removeAll()
         registerMessageID = nil
         if notify { onEvent?(.disconnected(nil)) }
     }
@@ -197,6 +200,22 @@ final class SSAPClient: NSObject {
         return true
     }
 
+    /// Subscribe to a value (e.g. volume) so the TV pushes updates. The handler is kept
+    /// and invoked for every push until disconnect.
+    func subscribe(_ request: SSAPRequest,
+                   handler: @escaping (Result<[String: Any], Error>) -> Void) {
+        guard let socket else { return }
+        let id = nextID("sub")
+        var message: [String: Any] = [
+            "id": id,
+            "type": "subscribe",
+            "uri": request.uri
+        ]
+        if let payload = request.payload { message["payload"] = payload }
+        subscriptions[id] = handler
+        rawSend(message, on: socket)
+    }
+
     // MARK: - Pointer input (hardware buttons)
 
     private func requestPointerSocket() {
@@ -295,6 +314,18 @@ final class SSAPClient: NSObject {
                 handler(.success(payload))
             }
             pending.removeValue(forKey: id)
+            return
+        }
+
+        // Route subscription pushes (kept registered for repeated updates).
+        if let id, let handler = subscriptions[id] {
+            if type == "error" {
+                let errText = (json["error"] as? String) ?? "error"
+                handler(.failure(NSError(domain: "SSAP", code: -1,
+                                         userInfo: [NSLocalizedDescriptionKey: errText])))
+            } else {
+                handler(.success(payload))
+            }
             return
         }
 

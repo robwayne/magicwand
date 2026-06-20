@@ -7,6 +7,7 @@ import UIKit
 /// back/exit, and a bottom row with colour keys, Apps, and play/pause.
 struct RemoteView: View {
     @Environment(TVConnectionManager.self) private var connection
+    @Environment(TVStore.self) private var store
 
     @State private var showApps = false
     @State private var showNumberPad = false
@@ -52,7 +53,7 @@ struct RemoteView: View {
     private var topRow: some View {
         HStack(spacing: 12) {
             RemoteKey(content: .symbol("power"), tint: Theme.danger) {
-                connection.powerOff()
+                connection.togglePower(using: store)
             }
             // AirPlay route picker, styled like a remote key.
             AirPlayRoutePicker(tint: UIColor(Theme.textPrimary))

@@ -31,6 +31,8 @@ struct TVDevice: Identifiable, Codable, Hashable {
     var screenSize: String?
     /// IP family, e.g. "IPv4".
     var ipType: String?
+    /// The TV's MAC address, captured while connected, used for Wake-on-LAN power-on.
+    var macAddress: String?
 
     init(
         id: UUID = UUID(),
@@ -44,7 +46,8 @@ struct TVDevice: Identifiable, Codable, Hashable {
         nickname: String? = nil,
         deviceType: String? = "webOS Smart TV",
         screenSize: String? = nil,
-        ipType: String? = "IPv4"
+        ipType: String? = "IPv4",
+        macAddress: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -58,6 +61,7 @@ struct TVDevice: Identifiable, Codable, Hashable {
         self.deviceType = deviceType
         self.screenSize = screenSize
         self.ipType = ipType
+        self.macAddress = macAddress
     }
 
     /// True once we have a stored client-key, i.e. the phone is already trusted by the TV.

@@ -67,6 +67,7 @@ final class TVStore {
             if let type = device.deviceType, !type.isEmpty { existing.deviceType = type }
             if let size = device.screenSize, !size.isEmpty { existing.screenSize = size }
             if let ipType = device.ipType, !ipType.isEmpty { existing.ipType = ipType }
+            if let mac = device.macAddress, !mac.isEmpty { existing.macAddress = mac }
             devices[index] = existing
             persist()
             return existing

@@ -46,6 +46,7 @@ enum SSAPRequest {
     case volumeUp
     case volumeDown
     case setMute(Bool)
+    case setVolume(Int)
     case getVolume
     case channelUp
     case channelDown
@@ -55,6 +56,7 @@ enum SSAPRequest {
     case listApps
     case listAllApps
     case getForegroundAppInfo
+    case getNetworkInfo
     case insertText(String)
     case sendEnterKey
     case deleteCharacters(Int)
@@ -69,6 +71,7 @@ enum SSAPRequest {
         case .volumeUp: "ssap://audio/volumeUp"
         case .volumeDown: "ssap://audio/volumeDown"
         case .setMute: "ssap://audio/setMute"
+        case .setVolume: "ssap://audio/setVolume"
         case .getVolume: "ssap://audio/getVolume"
         case .channelUp: "ssap://tv/channelUp"
         case .channelDown: "ssap://tv/channelDown"
@@ -78,6 +81,7 @@ enum SSAPRequest {
         case .listApps: "ssap://com.webos.applicationManager/listLaunchPoints"
         case .listAllApps: "ssap://com.webos.applicationManager/listApps"
         case .getForegroundAppInfo: "ssap://com.webos.applicationManager/getForegroundAppInfo"
+        case .getNetworkInfo: "ssap://com.webos.service.connectionmanager/getinfo"
         case .insertText: "ssap://com.webos.service.ime/insertText"
         case .sendEnterKey: "ssap://com.webos.service.ime/sendEnterKey"
         case .deleteCharacters: "ssap://com.webos.service.ime/deleteCharacters"
@@ -89,6 +93,7 @@ enum SSAPRequest {
     var payload: [String: Any]? {
         switch self {
         case .setMute(let on): ["mute": on]
+        case .setVolume(let level): ["volume": level]
         case .launchApp(let appId): ["id": appId]
         case .openURL(let target): ["target": target]
         case .insertText(let text): ["text": text, "replace": false]

@@ -34,9 +34,16 @@ final class TVConnectionManager {
     private(set) var activeDevice: TVDevice?
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
+    /// Current TV volume (0–100), kept live via a webOS subscription.
+    private(set) var currentVolume = 0
+    /// Whether the floating volume HUD is currently showing.
+    private(set) var isVolumeHUDVisible = false
 
     /// Transient banner message (e.g. a launch error reported by the TV), shown briefly.
     var toast: String?
+
+    private var lastSentVolume = -1
+    private var hudHideToken = UUID()
 
     /// Real launch-points reported by the TV (id + title), used to resolve app launches.
     private(set) var installedApps: [InstalledApp] = []
@@ -229,6 +236,22 @@ final class TVConnectionManager {
         // Sync the mute indicator and fetch the TV's real app list once connected.
         refreshVolume()
         fetchLaunchPoints()
+        fetchNetworkInfo()
+    }
+
+    /// Capture the TV's MAC address (for Wake-on-LAN) and persist it on the device.
+    private func fetchNetworkInfo() {
+        client.send(.getNetworkInfo) { [weak self] result in
+            guard let self, case .success(let payload) = result else { return }
+            let wifi = payload["wifiInfo"] as? [String: Any]
+            let wired = payload["wiredInfo"] as? [String: Any]
+            let mac = (wifi?["macAddress"] as? String) ?? (wired?["macAddress"] as? String)
+            if let mac, !mac.isEmpty, var device = self.activeDevice {
+                device.macAddress = mac
+                self.activeDevice = device
+                self.onPaired?(device) // persist the MAC
+            }
+        }
     }
 
     /// Re-fetch the TV's installed apps (used by the "Apps on this TV" list).
@@ -318,17 +341,82 @@ final class TVConnectionManager {
         client.sendClick()
     }
 
-    func volumeUp() { client.send(.volumeUp) }
-    func volumeDown() { client.send(.volumeDown) }
+    func volumeUp() {
+        client.send(.volumeUp)
+        currentVolume = min(100, currentVolume + 1) // optimistic; subscription corrects
+        lastSentVolume = currentVolume
+        flashVolumeHUD()
+    }
+
+    func volumeDown() {
+        client.send(.volumeDown)
+        currentVolume = max(0, currentVolume - 1)
+        lastSentVolume = currentVolume
+        flashVolumeHUD()
+    }
+
+    /// Set an absolute volume (0–100), e.g. by dragging the volume HUD. Throttled so we
+    /// only send to the TV when the integer level actually changes.
+    func setVolume(_ level: Int) {
+        let clamped = min(100, max(0, level))
+        currentVolume = clamped
+        if clamped != lastSentVolume {
+            lastSentVolume = clamped
+            client.send(.setVolume(clamped))
+        }
+        flashVolumeHUD()
+    }
+
     func channelUp() { client.send(.channelUp) }
     func channelDown() { client.send(.channelDown) }
 
     func toggleMute() {
         volumeMuted.toggle()
         client.send(.setMute(volumeMuted))
+        flashVolumeHUD()
+    }
+
+    /// Show the volume HUD and (re)arm its auto-hide timer.
+    func flashVolumeHUD() {
+        isVolumeHUDVisible = true
+        let token = UUID()
+        hudHideToken = token
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.6))
+            if hudHideToken == token { isVolumeHUDVisible = false }
+        }
     }
 
     func powerOff() { client.send(.turnOff) }
+
+    /// Power button behaviour: turn the TV off when connected, or wake it via
+    /// Wake-on-LAN (then reconnect) when it's off/disconnected.
+    func togglePower(using store: TVStore) {
+        if status.isConnected {
+            client.send(.turnOff)
+        } else {
+            wake(using: store)
+        }
+    }
+
+    /// Send a Wake-on-LAN magic packet to the last-known TV, then try to reconnect.
+    func wake(using store: TVStore) {
+        let device = activeDevice
+            ?? store.device(withID: store.lastSelectedID)
+            ?? store.sortedForLibrary.first(where: { $0.isPaired })
+        guard let device else { return }
+        guard let mac = device.macAddress, !mac.isEmpty else {
+            toast = "Can't wake the TV yet — connect once while it's on so I can learn its MAC address."
+            return
+        }
+        WakeOnLAN.send(macAddress: mac, ipAddress: device.host)
+        toast = "Waking \(device.displayName)…"
+        // Give the TV a few seconds to boot its network stack, then reconnect.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if !self.status.isConnected { self.connect(to: device) }
+        }
+    }
 
     func launchApp(_ app: StreamingApp) {
         // If we haven't received the TV's app list yet, fetch it first so we can resolve
@@ -406,11 +494,23 @@ final class TVConnectionManager {
     }
 
     private func refreshVolume() {
-        client.send(.getVolume) { [weak self] result in
-            guard case .success(let payload) = result else { return }
-            if let muted = payload["muted"] as? Bool {
-                self?.volumeMuted = muted
-            }
+        // Subscribe so the TV pushes live volume/mute updates (incl. physical-remote changes).
+        client.subscribe(.getVolume) { [weak self] result in
+            guard let self, case .success(let payload) = result else { return }
+            self.applyVolume(payload)
+        }
+    }
+
+    /// Parse a getVolume response/push. webOS firmwares vary: some return flat
+    /// `volume`/`muted`, others nest them under `volumeStatus`.
+    private func applyVolume(_ payload: [String: Any]) {
+        let status = payload["volumeStatus"] as? [String: Any]
+        if let volume = (payload["volume"] as? Int) ?? (status?["volume"] as? Int) {
+            currentVolume = volume
+            lastSentVolume = volume
+        }
+        if let muted = (payload["muted"] as? Bool) ?? (status?["muteStatus"] as? Bool) {
+            volumeMuted = muted
         }
     }
 }
