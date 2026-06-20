@@ -36,6 +36,8 @@ final class TVConnectionManager {
     private(set) var volumeMuted = false
     /// Current TV volume (0–100), kept live via a webOS subscription.
     private(set) var currentVolume = 0
+    /// True once the TV has reported a real volume value on this connection.
+    private(set) var hasVolumeReading = false
     /// Whether the floating volume HUD is currently showing.
     private(set) var isVolumeHUDVisible = false
 
@@ -132,6 +134,8 @@ final class TVConnectionManager {
         scanner.stop()
         pendingDevice = device
         capturedClientKey = device.clientKey
+        hasVolumeReading = false
+        isVolumeHUDVisible = false
         status = .connecting
         client.connect(to: device)
     }
@@ -151,6 +155,8 @@ final class TVConnectionManager {
         client.disconnect(notify: true)
         status = .disconnected
         activeDevice = nil
+        hasVolumeReading = false
+        isVolumeHUDVisible = false
     }
 
     /// Tear down the current connection and restart discovery, sending the app back
@@ -220,8 +226,12 @@ final class TVConnectionManager {
             finishConnection()
         case .disconnected:
             if status != .awaitingPIN { status = .disconnected }
+            hasVolumeReading = false
+            isVolumeHUDVisible = false
         case .failed(let error):
             status = .failed(error.errorDescription ?? "Connection failed")
+            hasVolumeReading = false
+            isVolumeHUDVisible = false
         }
     }
 
@@ -358,6 +368,7 @@ final class TVConnectionManager {
     }
 
     func volumeUp() {
+        guard status.isConnected else { return }
         client.send(.volumeUp)
         currentVolume = min(100, currentVolume + 1) // optimistic; subscription corrects
         lastSentVolume = currentVolume
@@ -365,6 +376,7 @@ final class TVConnectionManager {
     }
 
     func volumeDown() {
+        guard status.isConnected else { return }
         client.send(.volumeDown)
         currentVolume = max(0, currentVolume - 1)
         lastSentVolume = currentVolume
@@ -374,6 +386,7 @@ final class TVConnectionManager {
     /// Set an absolute volume (0–100), e.g. by dragging the volume HUD. Throttled so we
     /// only send to the TV when the integer level actually changes.
     func setVolume(_ level: Int) {
+        guard status.isConnected else { return }
         let clamped = min(100, max(0, level))
         currentVolume = clamped
         if clamped != lastSentVolume {
@@ -387,13 +400,16 @@ final class TVConnectionManager {
     func channelDown() { client.send(.channelDown) }
 
     func toggleMute() {
+        guard status.isConnected else { return }
         volumeMuted.toggle()
         client.send(.setMute(volumeMuted))
         flashVolumeHUD()
     }
 
-    /// Show the volume HUD and (re)arm its auto-hide timer.
+    /// Show the volume HUD and (re)arm its auto-hide timer — only when we actually have a
+    /// live volume reading from a connected TV (never with a stale/zero default).
     func flashVolumeHUD() {
+        guard status.isConnected, hasVolumeReading else { return }
         isVolumeHUDVisible = true
         let token = UUID()
         hudHideToken = token
@@ -531,6 +547,7 @@ final class TVConnectionManager {
         if let volume = (payload["volume"] as? Int) ?? (status?["volume"] as? Int) {
             currentVolume = volume
             lastSentVolume = volume
+            hasVolumeReading = true
         }
         if let muted = (payload["muted"] as? Bool) ?? (status?["muteStatus"] as? Bool) {
             volumeMuted = muted
