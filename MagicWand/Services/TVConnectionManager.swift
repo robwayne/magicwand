@@ -34,6 +34,10 @@ final class TVConnectionManager {
     private(set) var activeDevice: TVDevice?
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
+    /// The TV's power state, kept live via a webOS subscription (when connected).
+    enum PowerState { case on, off, unknown }
+    private(set) var powerState: PowerState = .unknown
+
     /// Current TV volume (0–100), kept live via a webOS subscription.
     private(set) var currentVolume = 0
     /// True once the TV has reported a real volume value on this connection.
@@ -228,10 +232,12 @@ final class TVConnectionManager {
             if status != .awaitingPIN { status = .disconnected }
             hasVolumeReading = false
             isVolumeHUDVisible = false
+            powerState = .unknown
         case .failed(let error):
             status = .failed(error.errorDescription ?? "Connection failed")
             hasVolumeReading = false
             isVolumeHUDVisible = false
+            powerState = .unknown
         }
     }
 
@@ -245,8 +251,24 @@ final class TVConnectionManager {
         onPaired?(device)
         // Sync the mute indicator and fetch the TV's real app list once connected.
         refreshVolume()
+        subscribePowerState()
         fetchLaunchPoints()
         fetchNetworkInfo()
+    }
+
+    private func subscribePowerState() {
+        powerState = .on // we just connected, so it's on
+        client.subscribe(.getPowerState) { [weak self] result in
+            guard let self, case .success(let payload) = result else { return }
+            let state = (payload["state"] as? String) ?? ""
+            let processing = (payload["processing"] as? String) ?? ""
+            // "Active" with the screen on means on; standby/suspend/screen-off means off.
+            if state == "Active" && !processing.localizedCaseInsensitiveContains("Screen Off") {
+                self.powerState = .on
+            } else if !state.isEmpty || !processing.isEmpty {
+                self.powerState = .off
+            }
+        }
     }
 
     /// Capture the TV's MAC address (for Wake-on-LAN) and persist it on the device.
@@ -421,12 +443,18 @@ final class TVConnectionManager {
 
     func powerOff() { client.send(.turnOff) }
 
-    /// Power button behaviour: turn the TV off when connected, or wake it via
-    /// Wake-on-LAN (then reconnect) when it's off/disconnected.
+    /// Power button behaviour, driven by the real power state so we never accidentally
+    /// turn the TV off during the reconnect window:
+    /// - connected + on  → turn off
+    /// - connected + off (screen off / standby) → turn the screen back on
+    /// - not connected   → Wake-on-LAN, then reconnect
     func togglePower(using store: TVStore) {
-        if status.isConnected {
+        switch (status.isConnected, powerState) {
+        case (true, .on):
             client.send(.turnOff)
-        } else {
+        case (true, _):
+            client.send(.turnOnScreen)
+        default:
             wake(using: store)
         }
     }

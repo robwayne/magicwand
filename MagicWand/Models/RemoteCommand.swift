@@ -51,6 +51,8 @@ enum SSAPRequest {
     case channelUp
     case channelDown
     case turnOff
+    case turnOnScreen
+    case getPowerState
     case launchApp(appId: String)
     case openURL(target: String)
     case listApps
@@ -76,6 +78,8 @@ enum SSAPRequest {
         case .channelUp: "ssap://tv/channelUp"
         case .channelDown: "ssap://tv/channelDown"
         case .turnOff: "ssap://system/turnOff"
+        case .turnOnScreen: "ssap://com.webos.service.tvpower/power/turnOnScreen"
+        case .getPowerState: "ssap://com.webos.service.tvpower/power/getPowerState"
         case .launchApp: "ssap://system.launcher/launch"
         case .openURL: "ssap://system.launcher/open"
         case .listApps: "ssap://com.webos.applicationManager/listLaunchPoints"

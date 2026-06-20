@@ -13,7 +13,7 @@ struct ConnectionHeader: View {
                     .foregroundStyle(Theme.textSecondary)
                 Text(statusText)
                     .font(.system(size: 14, weight: .regular))
-                    .foregroundStyle(connection.status.isConnected ? Theme.textSecondary : Theme.danger)
+                    .foregroundStyle(statusColor)
             }
             Spacer()
             RefreshConnectionButton()
@@ -22,14 +22,27 @@ struct ConnectionHeader: View {
         .padding(.top, 8)
     }
 
+    /// "On • Connected" / "Off • Connected" / "Off • Not Connected", plus transient states.
     private var statusText: String {
         switch connection.status {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .awaitingPIN: "Pairing…"
-        case .discovering: "Searching…"
-        case .failed: "Disconnected"
-        case .disconnected: "Not Connected"
+        case .connected:
+            let power = connection.powerState == .on ? "On" : "Off"
+            return "\(power) • Connected"
+        case .connecting: return "Connecting…"
+        case .awaitingPIN: return "Pairing…"
+        case .discovering: return "Searching…"
+        case .failed, .disconnected: return "Off • Not Connected"
+        }
+    }
+
+    private var statusColor: Color {
+        switch connection.status {
+        case .connected:
+            return connection.powerState == .on ? .green : Theme.textSecondary
+        case .connecting, .awaitingPIN, .discovering:
+            return Theme.textSecondary
+        case .failed, .disconnected:
+            return Theme.danger
         }
     }
 }
