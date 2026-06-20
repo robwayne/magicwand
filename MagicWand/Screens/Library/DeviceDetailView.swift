@@ -48,6 +48,7 @@ struct DeviceDetailView: View {
                     Section("Network") {
                         infoRow("Current IP Address", value: device.host)
                         infoRow("IP Type", value: device.ipType ?? "IPv4")
+                        infoRow("MAC Address", value: device.macAddress ?? "Unknown — reconnect while on")
                     }
                 }
                 .listStyle(.insetGrouped)

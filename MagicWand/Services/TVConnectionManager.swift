@@ -243,15 +243,31 @@ final class TVConnectionManager {
     private func fetchNetworkInfo() {
         client.send(.getNetworkInfo) { [weak self] result in
             guard let self, case .success(let payload) = result else { return }
+            // Prefer the interface the TV is actually reachable on, else any MAC found.
             let wifi = payload["wifiInfo"] as? [String: Any]
             let wired = payload["wiredInfo"] as? [String: Any]
-            let mac = (wifi?["macAddress"] as? String) ?? (wired?["macAddress"] as? String)
+            let mac = (wifi?["macAddress"] as? String)
+                ?? (wired?["macAddress"] as? String)
+                ?? Self.findMacAddress(in: payload)
             if let mac, !mac.isEmpty, var device = self.activeDevice {
                 device.macAddress = mac
                 self.activeDevice = device
                 self.onPaired?(device) // persist the MAC
             }
         }
+    }
+
+    /// Recursively search a getinfo payload for any "macAddress" value.
+    private static func findMacAddress(in dict: [String: Any]) -> String? {
+        for (key, value) in dict {
+            if key.lowercased() == "macaddress", let s = value as? String, !s.isEmpty {
+                return s
+            }
+            if let nested = value as? [String: Any], let found = findMacAddress(in: nested) {
+                return found
+            }
+        }
+        return nil
     }
 
     /// Re-fetch the TV's installed apps (used by the "Apps on this TV" list).
@@ -409,12 +425,19 @@ final class TVConnectionManager {
             toast = "Can't wake the TV yet — connect once while it's on so I can learn its MAC address."
             return
         }
-        WakeOnLAN.send(macAddress: mac, ipAddress: device.host)
         toast = "Waking \(device.displayName)…"
-        // Give the TV a few seconds to boot its network stack, then reconnect.
+        // Resend the magic packet and keep trying to reconnect for ~30s, since the TV
+        // takes a while to boot its network stack after a cold wake.
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
-            if !self.status.isConnected { self.connect(to: device) }
+            for attempt in 0..<10 {
+                if self.status.isConnected { return }
+                WakeOnLAN.send(macAddress: mac, ipAddress: device.host)
+                if attempt > 0 { self.connect(to: device) }
+                try? await Task.sleep(for: .seconds(3))
+            }
+            if !self.status.isConnected {
+                self.toast = "Couldn't reach \(device.displayName). Make sure the TV's network standby (Settings › General › Mobile TV On / 'Turn on via Wi-Fi') is enabled."
+            }
         }
     }
 
