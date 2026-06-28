@@ -1,26 +1,31 @@
 import Foundation
 import Network
 
-/// Last-resort discovery: scans the phone's local /24 subnet for hosts that have the
-/// webOS control port (3000) open, and reports them as candidate TVs.
+/// Last-resort discovery: scans the phone's local /24 subnet for hosts that have a
+/// known TV control port open and reports them, tagged with the matching vendor.
 ///
-/// This needs no special entitlement — it's just outbound TCP probes on the LAN — so it
-/// works whenever the Local Network permission is granted, even if Bonjour and SSDP both
-/// come up empty. Results stream in as each host responds.
+/// Works whenever the Local Network permission is granted (no entitlement required).
+/// Two ports are probed per host:
+/// - 3000 → LG webOS (plain WebSocket)
+/// - 8001 → Samsung Tizen (the device-info HTTP endpoint)
 @MainActor
 final class SubnetScanner {
     private var scanTask: Task<Void, Never>?
     private var reportedHosts: Set<String> = []
 
-    /// webOS plain-WebSocket control port.
-    private let port: NWEndpoint.Port = 3000
+    /// Ports we probe and the vendor each one identifies.
+    private let probes: [(port: NWEndpoint.Port, vendor: TVVendor)] = [
+        (3000, .lg),
+        (8001, .samsung)
+    ]
 
     func start(onFound: @escaping (DiscoveredTV) -> Void) {
         stop()
         reportedHosts.removeAll()
         guard let base = Self.localSubnetBase() else { return }
+        let probes = self.probes
         scanTask = Task { [weak self] in
-            await self?.scan(base: base, onFound: onFound)
+            await self?.scan(base: base, probes: probes, onFound: onFound)
         }
     }
 
@@ -31,34 +36,57 @@ final class SubnetScanner {
 
     // MARK: - Scanning
 
-    private func scan(base: String, onFound: @escaping (DiscoveredTV) -> Void) async {
-        let port = self.port
+    private func scan(base: String,
+                      probes: [(port: NWEndpoint.Port, vendor: TVVendor)],
+                      onFound: @escaping (DiscoveredTV) -> Void) async {
         let batchSize = 24
         var lower = 1
         while lower <= 254 {
             if Task.isCancelled { return }
             let upper = min(lower + batchSize - 1, 254)
 
-            let openHosts = await withTaskGroup(of: String?.self) { group -> [String] in
+            let hits = await withTaskGroup(of: (String, TVVendor)?.self) { group -> [(String, TVVendor)] in
                 for h in lower...upper {
                     let ip = "\(base).\(h)"
-                    group.addTask {
-                        await Self.probe(host: ip, port: port) ? ip : nil
+                    for probe in probes {
+                        let port = probe.port
+                        let vendor = probe.vendor
+                        group.addTask {
+                            await Self.probe(host: ip, port: port) ? (ip, vendor) : nil
+                        }
                     }
                 }
-                var found: [String] = []
+                var found: [(String, TVVendor)] = []
                 for await result in group {
-                    if let ip = result { found.append(ip) }
+                    if let result { found.append(result) }
                 }
                 return found
             }
 
-            for ip in openHosts where !reportedHosts.contains(ip) {
+            // Prefer the vendor-specific hit if the same host answered on multiple ports
+            // (very unlikely — LG and Samsung don't share ports — but be safe).
+            let bestByHost = Dictionary(grouping: hits, by: { $0.0 })
+                .compactMapValues { entries in
+                    entries.first(where: { $0.1 != .generic }) ?? entries.first
+                }
+
+            for (ip, entry) in bestByHost where !reportedHosts.contains(ip) {
                 reportedHosts.insert(ip)
-                onFound(DiscoveredTV(host: ip, name: "LG TV UP7500PVG", modelName: "UP7500PVG"))
+                onFound(Self.makeDiscovery(host: ip, vendor: entry.1))
             }
 
             lower = upper + 1
+        }
+    }
+
+    private static func makeDiscovery(host: String, vendor: TVVendor) -> DiscoveredTV {
+        switch vendor {
+        case .samsung:
+            return DiscoveredTV(host: host, name: "Samsung TV", modelName: "", vendor: .samsung)
+        case .lg:
+            return DiscoveredTV(host: host, name: "LG TV", modelName: "", vendor: .lg)
+        case .generic:
+            return DiscoveredTV(host: host, name: "Smart TV", modelName: "", vendor: .generic)
         }
     }
 
@@ -115,7 +143,9 @@ final class SubnetScanner {
                                     nil, 0, NI_NUMERICHOST)
                     }
                     if result == 0 {
-                        address = String(cString: hostBuffer)
+                        address = hostBuffer.withUnsafeBufferPointer {
+                            String(cString: $0.baseAddress!)
+                        }
                         break
                     }
                 }
@@ -135,7 +165,6 @@ private final class ProbeState: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
 
-    /// Returns `true` exactly once, for the first caller.
     func claim() -> Bool {
         lock.lock()
         defer { lock.unlock() }

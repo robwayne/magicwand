@@ -1,12 +1,14 @@
 import Foundation
 import Network
 
-/// A TV found on the local network during an SSDP scan.
+/// A TV found on the local network by any of the discovery services.
 struct DiscoveredTV: Identifiable, Hashable {
     var id: String { host }
     let host: String
     let name: String
     let modelName: String
+    /// Which control protocol the TV speaks; selects the backend at connect time.
+    let vendor: TVVendor
 }
 
 /// Discovers LG webOS TVs on the local Wi-Fi network using SSDP (UPnP) over UDP.
@@ -100,7 +102,7 @@ final class SSDPDiscovery {
         seenHosts.insert(host)
         let model = extractModel(from: response)
         let name = model.isEmpty ? "LG TV" : "LG TV \(model)"
-        onFound?(DiscoveredTV(host: host, name: name, modelName: model))
+        onFound?(DiscoveredTV(host: host, name: name, modelName: model, vendor: .lg))
     }
 
     private func extractHost(from response: String) -> String? {

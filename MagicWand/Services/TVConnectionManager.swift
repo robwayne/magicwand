@@ -4,9 +4,9 @@ import SwiftUI
 
 /// The single source of truth for the app's live connection to a TV.
 ///
-/// Wraps `SSAPClient` (control protocol) and `SSDPDiscovery` (finding TVs) and exposes
-/// simple, UI-friendly state and intent methods. Injected into the environment so any
-/// screen can read `status` or fire a command.
+/// Owns whichever vendor backend matches the active device (LG webOS, Samsung Tizen, …),
+/// the discovery services, and the UI-observable state. The rest of the app only sees
+/// this manager — backends are an implementation detail.
 @MainActor
 @Observable
 final class TVConnectionManager {
@@ -14,7 +14,8 @@ final class TVConnectionManager {
         case disconnected
         case discovering
         case connecting
-        case awaitingPIN
+        case awaitingPIN     // legacy name kept so the UI doesn't need to change; means
+                             // "TV needs user input to finish pairing", per `pairingMethod`
         case connected
         case failed(String)
 
@@ -23,10 +24,9 @@ final class TVConnectionManager {
 
     /// Which top-level UI to show. Onboarding is only for first launch or "add a new TV";
     /// otherwise we go straight to the main app and (re)connect in the background.
-    enum Route {
-        case onboarding
-        case main
-    }
+    enum Route { case onboarding, main }
+
+    enum PowerState { case on, off, unknown }
 
     // Live state the UI observes.
     private(set) var status: Status = .disconnected
@@ -34,18 +34,16 @@ final class TVConnectionManager {
     private(set) var activeDevice: TVDevice?
     private(set) var discovered: [DiscoveredTV] = []
     private(set) var volumeMuted = false
-    /// The TV's power state, kept live via a webOS subscription (when connected).
-    enum PowerState { case on, off, unknown }
     private(set) var powerState: PowerState = .unknown
 
-    /// Current TV volume (0–100), kept live via a webOS subscription.
+    /// How the active backend wants the user to pair (PIN field vs. "accept on TV").
+    private(set) var pairingMethod: PairingMethod = .pin
+
     private(set) var currentVolume = 0
-    /// True once the TV has reported a real volume value on this connection.
     private(set) var hasVolumeReading = false
-    /// Whether the floating volume HUD is currently showing.
     private(set) var isVolumeHUDVisible = false
 
-    /// Transient banner message (e.g. a launch error reported by the TV), shown briefly.
+    /// Transient banner message, shown briefly at the top of the main UI.
     var toast: String?
 
     private var lastSentVolume = -1
@@ -53,7 +51,6 @@ final class TVConnectionManager {
 
     /// Real launch-points reported by the TV (id + title), used to resolve app launches.
     private(set) var installedApps: [InstalledApp] = []
-    /// Why the installed-app list couldn't be read, if it failed (for diagnostics/UI).
     private(set) var appListError: String?
 
     struct InstalledApp: Identifiable, Hashable {
@@ -64,24 +61,19 @@ final class TVConnectionManager {
     /// Bridged to `TVStore` so successful pairings get persisted.
     var onPaired: ((TVDevice) -> Void)?
 
-    private let client = SSAPClient()
+    // MARK: - Backend + discovery
+
+    private var backend: (any TVControlBackend)?
     private let discovery = SSDPDiscovery()
     private let bonjour = BonjourDiscovery()
     private let scanner = SubnetScanner()
     private var pendingDevice: TVDevice?
-    private var capturedClientKey: String?
-
-    init() {
-        client.onEvent = { [weak self] event in
-            self?.handle(event)
-        }
-    }
+    private var capturedCredentials: String?
 
     // MARK: - Launch
 
-    /// Called once at launch. If we have a previously-paired TV, go straight to the
-    /// main app and silently reconnect using the stored client-key (no PIN prompt).
-    /// Otherwise show the onboarding flow.
+    /// Called once at launch. If we have a previously-paired TV, go straight to the main
+    /// app and silently reconnect using the stored credentials; otherwise show onboarding.
     func bootstrap(using store: TVStore) {
         let candidate = store.device(withID: store.lastSelectedID)
             ?? store.sortedForLibrary.first(where: { $0.isPaired })
@@ -100,14 +92,13 @@ final class TVConnectionManager {
         status = .discovering
         let onFound: (DiscoveredTV) -> Void = { [weak self] tv in
             guard let self else { return }
-            // Dedupe by host so Bonjour + SSDP don't list the same TV twice.
             if !self.discovered.contains(where: { $0.host == tv.host }) {
                 self.discovered.append(tv)
             }
         }
-        bonjour.start(onFound: onFound)   // primary: works with just Local Network permission
-        discovery.start(onFound: onFound) // secondary: SSDP (needs multicast entitlement)
-        scanner.start(onFound: onFound)   // fallback: probe the /24 subnet for the webOS port
+        bonjour.start(onFound: onFound)
+        discovery.start(onFound: onFound)
+        scanner.start(onFound: onFound)
     }
 
     func stopDiscovery() {
@@ -119,93 +110,86 @@ final class TVConnectionManager {
 
     // MARK: - Connecting
 
-    /// Connect to a discovered TV (no stored key yet → will trigger a PIN prompt).
     func connect(to discoveredTV: DiscoveredTV) {
         let device = TVDevice(
+            vendor: discoveredTV.vendor,
             name: discoveredTV.name,
             modelName: discoveredTV.modelName,
             host: discoveredTV.host,
-            deviceType: "webOS Smart TV",
             ipType: discoveredTV.host.contains(":") ? "IPv6" : "IPv4"
         )
         connect(to: device)
     }
 
-    /// Connect to a known/saved TV. If it already has a client-key the TV won't prompt.
     func connect(to device: TVDevice) {
         bonjour.stop()
         discovery.stop()
         scanner.stop()
         pendingDevice = device
-        capturedClientKey = device.clientKey
+        capturedCredentials = device.clientKey
         hasVolumeReading = false
         isVolumeHUDVisible = false
         status = .connecting
-        client.connect(to: device)
+
+        // Pick (or rebuild) the backend matching this TV's vendor.
+        let newBackend = Self.makeBackend(for: device.vendor)
+        backend?.disconnect()
+        backend = newBackend
+        newBackend.onEvent = { [weak self] event in self?.handle(event) }
+        newBackend.connect(to: device)
     }
 
-    /// Manually add a TV by IP (the "I don't see the device" path).
-    func connectManually(host: String, name: String = "LG TV UP7500PVG") {
-        let device = TVDevice(name: name, modelName: "UP7500PVG", host: host)
+    /// Manually add a TV by IP. Defaults to LG so existing manual-entry behaviour is
+    /// unchanged; the Samsung entry point lives in the future "Add by IP" picker.
+    func connectManually(host: String, name: String = "LG TV", vendor: TVVendor = .lg) {
+        let device = TVDevice(vendor: vendor, name: name, host: host)
         connect(to: device)
     }
 
-    /// Send the PIN the user read off the TV during pairing.
+    /// Submit a pairing credential the user typed (LG: PIN). No-op for vendors that pair
+    /// via the TV's own UI (Samsung).
     func submitPIN(_ pin: String) {
-        client.submitPIN(pin)
+        backend?.submitPairingInput(pin)
     }
 
     func disconnect() {
-        client.disconnect(notify: true)
+        backend?.disconnect()
         status = .disconnected
         activeDevice = nil
         hasVolumeReading = false
         isVolumeHUDVisible = false
     }
 
-    /// Tear down the current connection and restart discovery, sending the app back
-    /// into the onboarding flow to pair with a different TV. Used by the Library's
-    /// "Connect a New TV" button.
     func beginNewConnection() {
-        client.disconnect(notify: false)
+        backend?.disconnect()
         activeDevice = nil
         discovered.removeAll()
         pendingDevice = nil
-        capturedClientKey = nil
+        capturedCredentials = nil
         route = .onboarding
         startDiscovery()
     }
 
-    /// Called when the app returns to the foreground. The control socket is dropped while
-    /// backgrounded, so silently reconnect to whatever TV we were last using.
     func reconnectAfterForeground(using store: TVStore) {
-        guard route == .main else { return }      // don't interrupt onboarding/pairing
+        guard route == .main else { return }
         guard status != .connected, status != .connecting else { return }
         let device = activeDevice
             ?? store.device(withID: store.lastSelectedID)
             ?? store.sortedForLibrary.first(where: { $0.isPaired })
-        if let device, device.isPaired {
-            connect(to: device)
-        }
+        if let device, device.isPaired { connect(to: device) }
     }
 
-    /// Force a reconnect to the active (or last-used) TV. Used by the refresh buttons.
     func refreshConnection(using store: TVStore) {
         let device = activeDevice
             ?? store.device(withID: store.lastSelectedID)
             ?? store.sortedForLibrary.first(where: { $0.isPaired })
-        if let device, device.isPaired {
-            connect(to: device)
-        }
+        if let device, device.isPaired { connect(to: device) }
     }
 
-    /// Re-pair the currently-active TV (e.g. to upgrade a key that lacks permissions).
     func reestablishActive() {
         if let device = activeDevice { reestablish(device) }
     }
 
-    /// Re-run the full pairing process for a device (clears the stored key so the TV
-    /// shows a fresh PIN). Used by the device detail screen.
     func reestablish(_ device: TVDevice) {
         var fresh = device
         fresh.clientKey = nil
@@ -215,106 +199,85 @@ final class TVConnectionManager {
 
     // MARK: - Event handling
 
-    private func handle(_ event: SSAPEvent) {
+    private func handle(_ event: TVBackendEvent) {
         switch event {
         case .connecting:
             status = .connecting
-        case .awaitingPIN:
+        case .awaitingPairing(let method):
+            pairingMethod = method
             status = .awaitingPIN
-            // A PIN is needed (first pairing, or the saved key expired) — make sure the
-            // onboarding pairing screen is what's on-screen.
             route = .onboarding
-        case .registered(let key):
-            capturedClientKey = key
+        case .paired(let credentials):
+            capturedCredentials = credentials ?? capturedCredentials
         case .ready:
             finishConnection()
         case .disconnected:
             if status != .awaitingPIN { status = .disconnected }
-            hasVolumeReading = false
-            isVolumeHUDVisible = false
-            powerState = .unknown
-        case .failed(let error):
-            status = .failed(error.errorDescription ?? "Connection failed")
-            hasVolumeReading = false
-            isVolumeHUDVisible = false
-            powerState = .unknown
+            resetTransientState()
+        case .failed(let message):
+            status = .failed(message)
+            resetTransientState()
+        case .volume(let level, let muted):
+            if let level {
+                currentVolume = level
+                lastSentVolume = level
+                hasVolumeReading = true
+            }
+            if let muted { volumeMuted = muted }
+        case .powerState(let on):
+            powerState = on ? .on : .off
+        case .launchResult(let appId, let success, let errorText):
+            if !success {
+                let detail = errorText.map { ": \($0)" } ?? ""
+                toast = "TV refused to launch [id: \(appId)]\(detail)."
+            }
         }
+    }
+
+    private func resetTransientState() {
+        hasVolumeReading = false
+        isVolumeHUDVisible = false
+        powerState = .unknown
     }
 
     private func finishConnection() {
         guard var device = pendingDevice else { return }
-        device.clientKey = capturedClientKey ?? device.clientKey
+        device.clientKey = capturedCredentials ?? device.clientKey
         device.lastConnected = Date()
         activeDevice = device
         status = .connected
         route = .main
         onPaired?(device)
-        // Sync the mute indicator and fetch the TV's real app list once connected.
-        refreshVolume()
-        subscribePowerState()
-        fetchLaunchPoints()
-        fetchNetworkInfo()
+        // Bring up subscriptions and prefetch metadata.
+        backend?.subscribeVolume()
+        backend?.subscribePowerState()
+        fetchInstalledApps()
+        fetchMACAddress()
     }
 
-    private func subscribePowerState() {
-        powerState = .on // we just connected, so it's on
-        client.subscribe(.getPowerState) { [weak self] result in
-            guard let self, case .success(let payload) = result else { return }
-            let state = (payload["state"] as? String) ?? ""
-            let processing = (payload["processing"] as? String) ?? ""
-            // "Active" with the screen on means on; standby/suspend/screen-off means off.
-            if state == "Active" && !processing.localizedCaseInsensitiveContains("Screen Off") {
-                self.powerState = .on
-            } else if !state.isEmpty || !processing.isEmpty {
-                self.powerState = .off
-            }
+    private func fetchMACAddress() {
+        backend?.fetchMACAddress { [weak self] mac in
+            guard let self, let mac, !mac.isEmpty, var device = self.activeDevice else { return }
+            device.macAddress = mac
+            self.activeDevice = device
+            self.onPaired?(device) // persist
         }
     }
 
-    /// Capture the TV's MAC address (for Wake-on-LAN) and persist it on the device.
-    private func fetchNetworkInfo() {
-        client.send(.getNetworkInfo) { [weak self] result in
-            guard let self, case .success(let payload) = result else { return }
-            // Prefer the interface the TV is actually reachable on, else any MAC found.
-            let wifi = payload["wifiInfo"] as? [String: Any]
-            let wired = payload["wiredInfo"] as? [String: Any]
-            let mac = (wifi?["macAddress"] as? String)
-                ?? (wired?["macAddress"] as? String)
-                ?? Self.findMacAddress(in: payload)
-            if let mac, !mac.isEmpty, var device = self.activeDevice {
-                device.macAddress = mac
-                self.activeDevice = device
-                self.onPaired?(device) // persist the MAC
-            }
-        }
-    }
+    // MARK: - App list
 
-    /// Recursively search a getinfo payload for any "macAddress" value.
-    private static func findMacAddress(in dict: [String: Any]) -> String? {
-        for (key, value) in dict {
-            if key.lowercased() == "macaddress", let s = value as? String, !s.isEmpty {
-                return s
-            }
-            if let nested = value as? [String: Any], let found = findMacAddress(in: nested) {
-                return found
-            }
-        }
-        return nil
-    }
-
-    /// Re-fetch the TV's installed apps (used by the "Apps on this TV" list).
-    func refreshInstalledApps() { fetchLaunchPoints() }
+    func refreshInstalledApps() { fetchInstalledApps() }
 
     private var fetchToken = UUID()
 
-    private func fetchLaunchPoints(completion: (() -> Void)? = nil) {
+    private func fetchInstalledApps(completion: (() -> Void)? = nil) {
         appListError = nil
         let token = UUID()
         fetchToken = token
 
         func finish() {
             guard fetchToken == token else { return }
-            fetchToken = UUID() // invalidate; ignore any late responses
+            fetchToken = UUID()
             completion?()
         }
 
@@ -328,70 +291,31 @@ final class TVConnectionManager {
             finish()
         }
 
-        // Primary source: the home-screen launch points.
-        client.send(.listApps) { [weak self] result in
+        backend?.fetchInstalledApps { [weak self] result in
             guard let self, self.fetchToken == token else { return }
-            let (points, error1) = Self.parseApps(result, key: "launchPoints")
-            if !points.isEmpty {
-                self.installedApps = points
-                finish()
-                return
-            }
-            // Fallback: the full installed-apps list (different API / permission).
-            self.client.send(.listAllApps) { [weak self] result2 in
-                guard let self, self.fetchToken == token else { return }
-                let (apps, error2) = Self.parseApps(result2, key: "apps")
-                if !apps.isEmpty {
-                    self.installedApps = apps
+            switch result {
+            case .success(let apps):
+                if apps.isEmpty {
+                    self.appListError = "empty list"
                 } else {
-                    self.appListError = error1 ?? error2 ?? "no apps returned"
+                    self.installedApps = apps.map { InstalledApp(id: $0.id, title: $0.title) }
                 }
-                finish()
+            case .failure(let error):
+                self.appListError = error.localizedDescription
             }
-        }
-    }
-
-    /// Parse an app/launch-point list response, returning the apps and (if it failed)
-    /// a short reason string for diagnostics.
-    private static func parseApps(_ result: Result<[String: Any], Error>,
-                                  key: String) -> ([InstalledApp], String?) {
-        switch result {
-        case .failure(let error):
-            return ([], error.localizedDescription)
-        case .success(let payload):
-            guard let entries = payload[key] as? [[String: Any]] else {
-                if let ret = payload["returnValue"] as? Bool, ret == false {
-                    return ([], (payload["errorText"] as? String) ?? "request returned false")
-                }
-                return ([], "missing \"\(key)\" in response")
-            }
-            let apps = entries.compactMap { entry -> InstalledApp? in
-                guard let id = entry["id"] as? String,
-                      let title = entry["title"] as? String else { return nil }
-                return InstalledApp(id: id, title: title)
-            }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-            return (apps, apps.isEmpty ? "empty list" : nil)
+            finish()
         }
     }
 
     // MARK: - Commands (high level)
 
-    func sendButton(_ button: RemoteButton) {
-        client.sendButton(button)
-    }
-
-    func move(dx: CGFloat, dy: CGFloat, drag: Bool) {
-        client.sendMove(dx: dx, dy: dy, drag: drag)
-    }
-
-    func click() {
-        client.sendClick()
-    }
+    func sendButton(_ button: RemoteButton) { backend?.sendButton(button) }
+    func move(dx: CGFloat, dy: CGFloat, drag: Bool) { backend?.sendMove(dx: dx, dy: dy, drag: drag) }
+    func click() { backend?.sendClick() }
 
     func volumeUp() {
         guard status.isConnected else { return }
-        client.send(.volumeUp)
+        backend?.volumeUp()
         currentVolume = min(100, currentVolume + 1) // optimistic; subscription corrects
         lastSentVolume = currentVolume
         flashVolumeHUD()
@@ -399,37 +323,35 @@ final class TVConnectionManager {
 
     func volumeDown() {
         guard status.isConnected else { return }
-        client.send(.volumeDown)
+        backend?.volumeDown()
         currentVolume = max(0, currentVolume - 1)
         lastSentVolume = currentVolume
         flashVolumeHUD()
     }
 
-    /// Set an absolute volume (0–100), e.g. by dragging the volume HUD. Throttled so we
-    /// only send to the TV when the integer level actually changes.
     func setVolume(_ level: Int) {
         guard status.isConnected else { return }
         let clamped = min(100, max(0, level))
         currentVolume = clamped
         if clamped != lastSentVolume {
             lastSentVolume = clamped
-            client.send(.setVolume(clamped))
+            backend?.setVolume(clamped)
         }
         flashVolumeHUD()
     }
 
-    func channelUp() { client.send(.channelUp) }
-    func channelDown() { client.send(.channelDown) }
+    func channelUp()   { backend?.channelUp() }
+    func channelDown() { backend?.channelDown() }
 
     func toggleMute() {
         guard status.isConnected else { return }
         volumeMuted.toggle()
-        client.send(.setMute(volumeMuted))
+        backend?.setMute(volumeMuted)
         flashVolumeHUD()
     }
 
-    /// Show the volume HUD and (re)arm its auto-hide timer — only when we actually have a
-    /// live volume reading from a connected TV (never with a stale/zero default).
+    /// Only flash the HUD when the connected backend has reported a real volume level.
+    /// Vendors that don't expose volume readings (e.g. Samsung Tizen) won't show the HUD.
     func flashVolumeHUD() {
         guard status.isConnected, hasVolumeReading else { return }
         isVolumeHUDVisible = true
@@ -441,25 +363,20 @@ final class TVConnectionManager {
         }
     }
 
-    func powerOff() { client.send(.turnOff) }
+    func powerOff() { backend?.turnOff() }
 
-    /// Power button behaviour, driven by the real power state so we never accidentally
-    /// turn the TV off during the reconnect window:
-    /// - connected + on  → turn off
-    /// - connected + off (screen off / standby) → turn the screen back on
-    /// - not connected   → Wake-on-LAN, then reconnect
+    /// connected + on → turn off; connected + off → turn screen on; disconnected → wake.
     func togglePower(using store: TVStore) {
         switch (status.isConnected, powerState) {
         case (true, .on):
-            client.send(.turnOff)
+            backend?.turnOff()
         case (true, _):
-            client.send(.turnOnScreen)
+            backend?.turnOnScreen()
         default:
             wake(using: store)
         }
     }
 
-    /// Send a Wake-on-LAN magic packet to the last-known TV, then try to reconnect.
     func wake(using store: TVStore) {
         let device = activeDevice
             ?? store.device(withID: store.lastSelectedID)
@@ -470,8 +387,6 @@ final class TVConnectionManager {
             return
         }
         toast = "Waking \(device.displayName)…"
-        // Resend the magic packet and keep trying to reconnect for ~30s, since the TV
-        // takes a while to boot its network stack after a cold wake.
         Task { @MainActor in
             for attempt in 0..<10 {
                 if self.status.isConnected { return }
@@ -485,11 +400,12 @@ final class TVConnectionManager {
         }
     }
 
+    // MARK: - Apps
+
     func launchApp(_ app: StreamingApp) {
-        // If we haven't received the TV's app list yet, fetch it first so we can resolve
-        // the real launch-point id (fixes apps whose default id is wrong, e.g. Disney+).
+        // If the live app list isn't loaded yet, fetch it first so we resolve a real id.
         if installedApps.isEmpty {
-            fetchLaunchPoints { [weak self] in
+            fetchInstalledApps { [weak self] in
                 guard let self else { return }
                 if self.installedApps.isEmpty {
                     let reason = self.appListError.map { " (\($0))" } ?? ""
@@ -504,27 +420,13 @@ final class TVConnectionManager {
 
     /// Launch a specific TV launch-point id directly (from the "Apps on this TV" list).
     func launch(appId: String, label: String? = nil) {
-        let name = label ?? appId
-        client.send(.launchApp(appId: appId)) { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let payload):
-                if let ret = payload["returnValue"] as? Bool, ret == false {
-                    self.toast = "TV refused to launch \(name) [id: \(appId)]."
-                }
-            case .failure(let error):
-                self.toast = "Couldn't launch \(name) [id: \(appId)]: \(error.localizedDescription)"
-            }
-        }
+        backend?.launchApp(id: appId)
     }
 
     func clearToast() { toast = nil }
 
-    /// Match a known app to the TV's actual launch-point id, by normalized title first
-    /// (most reliable across regions/firmware), then by the best-effort default id.
     private func resolveLaunchId(for app: StreamingApp) -> String {
         let target = Self.normalize(app.name)
-
         if let exact = installedApps.first(where: { Self.normalize($0.title) == target }) {
             return exact.id
         }
@@ -540,8 +442,6 @@ final class TVConnectionManager {
         return app.webOSId
     }
 
-    /// Lowercase, drop the word "plus"/"+", and keep only alphanumerics so titles like
-    /// "Disney+", "Disney Plus", and "Prime Video" all compare cleanly.
     private static func normalize(_ string: String) -> String {
         string.lowercased()
             .replacingOccurrences(of: "plus", with: "")
@@ -549,36 +449,19 @@ final class TVConnectionManager {
     }
 
     func openBrowser(_ urlString: String = "https://www.google.com") {
-        client.send(.openURL(target: urlString))
+        backend?.openURL(urlString)
     }
 
-    func sendText(_ text: String) {
-        client.send(.insertText(text))
-    }
+    func sendText(_ text: String) { backend?.insertText(text) }
+    func sendEnter()               { backend?.sendEnterKey() }
 
-    func sendEnter() {
-        client.send(.sendEnterKey)
-    }
+    // MARK: - Backend factory
 
-    private func refreshVolume() {
-        // Subscribe so the TV pushes live volume/mute updates (incl. physical-remote changes).
-        client.subscribe(.getVolume) { [weak self] result in
-            guard let self, case .success(let payload) = result else { return }
-            self.applyVolume(payload)
-        }
-    }
-
-    /// Parse a getVolume response/push. webOS firmwares vary: some return flat
-    /// `volume`/`muted`, others nest them under `volumeStatus`.
-    private func applyVolume(_ payload: [String: Any]) {
-        let status = payload["volumeStatus"] as? [String: Any]
-        if let volume = (payload["volume"] as? Int) ?? (status?["volume"] as? Int) {
-            currentVolume = volume
-            lastSentVolume = volume
-            hasVolumeReading = true
-        }
-        if let muted = (payload["muted"] as? Bool) ?? (status?["muteStatus"] as? Bool) {
-            volumeMuted = muted
+    private static func makeBackend(for vendor: TVVendor) -> any TVControlBackend {
+        switch vendor {
+        case .lg:      LGWebOSBackend()
+        case .samsung: TizenBackend()
+        case .generic: LGWebOSBackend() // safe default; replace when a backend exists
         }
     }
 }

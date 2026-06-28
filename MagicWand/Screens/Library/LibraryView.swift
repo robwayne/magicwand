@@ -152,11 +152,20 @@ private struct TVLibraryRow: View {
     }
 
     private var subtitle: String {
-        if isActive { return "Active now" }
+        let prefix = vendorTag(device.vendor)
+        if isActive { return "\(prefix) · Active now" }
         if let date = device.lastConnected {
-            return "Last used \(date.formatted(.relative(presentation: .named)))"
+            return "\(prefix) · Last used \(date.formatted(.relative(presentation: .named)))"
         }
-        return device.isPaired ? device.host : "\(device.host) · Not paired"
+        return device.isPaired ? "\(prefix) · \(device.host)" : "\(prefix) · \(device.host) · Not paired"
+    }
+
+    private func vendorTag(_ vendor: TVVendor) -> String {
+        switch vendor {
+        case .lg: "LG"
+        case .samsung: "Samsung"
+        case .generic: "Smart TV"
+        }
     }
 }
 

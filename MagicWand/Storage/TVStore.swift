@@ -54,6 +54,9 @@ final class TVStore {
             var existing = devices[index]
             existing.name = device.name.isEmpty ? existing.name : device.name
             existing.modelName = device.modelName.isEmpty ? existing.modelName : device.modelName
+            // Only overwrite vendor/port/TLS when the incoming value is meaningful, so a
+            // discovery update never accidentally downgrades a known-Samsung TV to LG.
+            if device.vendor != .generic { existing.vendor = device.vendor }
             existing.port = device.port
             existing.useTLS = device.useTLS
             if let key = device.clientKey, !key.isEmpty {
